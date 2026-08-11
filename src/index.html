@@ -9,10 +9,12 @@
   <div id="root"></div>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script type="module">
-  const { useState, useMemo, useCallback, useRef, useEffect } = React;
-  /*import { useState, useMemo, useCallback, useRef, useEffect } from "react";*/
-  /*import * as XLSX from "xlsx";*/
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script type="text/babel">
+    const { useState, useMemo, useCallback, useRef, useEffect } = React;
+
+import { useState, useMemo, useCallback, useRef, useEffect } from "react";
+import * as XLSX from "xlsx";
 
 /* ---------------------------------------------------------------- identity */
 // Stable id from the ad URL. Never derived from row order, so statuses,
@@ -1414,8 +1416,8 @@ function FeedbackPanel({ onClose }) {
     </div>
   );
 }
-const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(React.createElement(PhDTracker));
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<PhDTracker />);
   </script>
 </body>
 </html>
