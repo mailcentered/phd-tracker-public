@@ -1,0 +1,6 @@
+{
+  "name": "phd-tracker",
+  "dependencies": { "react": "^18", "react-dom": "^18" },
+  "scripts": { "build": "echo 'No build needed'" },
+  "type": "module"
+}
