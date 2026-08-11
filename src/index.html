@@ -9,7 +9,8 @@
   <div id="root"></div>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script>
+  <script type="module">
+  const { useState, useMemo, useCallback, useRef, useEffect } = React;
   /*import { useState, useMemo, useCallback, useRef, useEffect } from "react";*/
   /*import * as XLSX from "xlsx";*/
 
@@ -1413,7 +1414,8 @@ function FeedbackPanel({ onClose }) {
     </div>
   );
 }
-
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(React.createElement(PhDTracker));
   </script>
 </body>
 </html>
