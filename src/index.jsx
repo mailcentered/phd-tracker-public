@@ -1,5 +1,17 @@
-import { useState, useMemo, useCallback, useRef, useEffect } from "react";
-import * as XLSX from "xlsx";
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PhD Tracker</title>
+</head>
+<body>
+  <div id="root"></div>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script>
+  /*import { useState, useMemo, useCallback, useRef, useEffect } from "react";*/
+  /*import * as XLSX from "xlsx";*/
 
 /* ---------------------------------------------------------------- identity */
 // Stable id from the ad URL. Never derived from row order, so statuses,
@@ -1401,3 +1413,7 @@ function FeedbackPanel({ onClose }) {
     </div>
   );
 }
+
+  </script>
+</body>
+</html>
