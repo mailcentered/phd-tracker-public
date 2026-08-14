@@ -1,0 +1,4184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PhD Tracker</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    :root {
+      --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      --surface-1: #F4F2ED; --surface-2: #FFFFFF;
+      --border: #E3E0D8; --border-strong: #CFCBC1;
+      --text-primary: #3D3A34; --text-secondary: #6B6760; --text-muted: #97938B;
+      --text-accent: #185FA5; --bg-accent: #E6F1FB; --border-accent: #A9CDF0;
+      --text-success: #3B6D11; --text-danger: #A32D2D; --bg-danger: #FCEBEB;
+      --radius: 6px; --shadow-popover: 0 4px 16px rgba(0,0,0,0.10);
+    }
+    body { font-family: var(--font-sans); padding: 16px; background: #FAF9F7;
+           color: var(--text-primary); }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <!-- JSX is precompiled at build time, so there is no in-browser transpiler
+       and no dependency on which Babel major version a CDN happens to serve.
+       Dependency versions are pinned for the same reason. -->
+  <script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script>
+const {
+  useState,
+  useMemo,
+  useCallback,
+  useRef,
+  useEffect
+} = React;
+
+/* ---------------------------------------------------------------- identity */
+// Stable id from the ad URL. Never derived from row order, so statuses,
+// notes and doc ticks survive re-scraping and re-sorting.
+function posId(url) {
+  let h = 0;
+  for (let i = 0; i < url.length; i++) {
+    h = (h << 5) - h + url.charCodeAt(i);
+    h |= 0;
+  }
+  return "p" + Math.abs(h).toString(36);
+}
+
+/* ------------------------------------------------------------------- seed */
+/* Offline fallback only. Rendered when the backend cannot be reached, so the
+   page is not blank. These rows carry no assessment, so the success column
+   shows a dash rather than a number. Live data and all scoring come from the
+   API. */
+const API_BASE = "https://mrahroy.pythonanywhere.com";
+
+/* Build flag. The public demo and the private, login-gated build are produced
+   from this one file with only this constant changed. Two separate frontends
+   would drift apart the moment either was edited. */
+const REQUIRE_AUTH = false;
+const POSITIONS = [{
+  topic: "Wearable stress detection using multimodal physiological sensors",
+  url: "https://www.findaphd.com/phds/project/wearable-stress",
+  source: "FindAPhD",
+  deadline: "2026-07-28",
+  uni: "Univ of Edinburgh",
+  country: "UK",
+  requires: "SOP, LoM, Proposal, CV",
+  remarks: "Perfect thesis alignment",
+  profEmail: "j.mackenzie@ed.ac.uk"
+}, {
+  topic: "Explainable AI for clinical decision support systems",
+  url: "https://jobs.ac.uk/job/xai-clinical-decision",
+  source: "jobs.ac.uk",
+  deadline: "2026-07-29",
+  uni: "Imperial College",
+  country: "UK",
+  requires: "SOP, Proposal, CL, IELTS",
+  remarks: "Highly competitive",
+  profEmail: "r.hastings@imperial.ac.uk"
+}, {
+  topic: "Sensor fusion for indoor AR navigation",
+  url: "https://www.phdportal.com/studies/sensor-fusion-ar",
+  source: "PhDPortal",
+  deadline: "2026-08-10",
+  uni: "TU Delft",
+  country: "Netherlands",
+  requires: "LoM, Proposal, CV, Refs",
+  remarks: "Prof response rate low",
+  profEmail: ""
+}, {
+  topic: "Emotion recognition from physiological signals in smart environments",
+  url: "https://www.scholarshipdb.net/emotion-recognition-aalto",
+  source: "ScholarshipDB",
+  deadline: "2026-08-15",
+  uni: "Aalto Univ",
+  country: "Finland",
+  requires: "SOP, LoM, CV, Transcripts",
+  remarks: "Strong topic match",
+  profEmail: "m.virtanen@aalto.fi"
+}, {
+  topic: "Satellite imagery for crop yield forecasting using deep learning",
+  url: "https://ethz.ch/phd/satellite-crop-yield",
+  source: "Uni site",
+  deadline: "2026-08-22",
+  uni: "ETH Zurich",
+  country: "Switzerland",
+  requires: "SOP, Proposal, CV, GRE",
+  remarks: "Uni acceptance rate 8%",
+  profEmail: "s.weber@ethz.ch"
+}, {
+  topic: "Agentic AI systems for hospital workflow automation",
+  url: "https://linkedin.com/jobs/agentic-ai-melbourne",
+  source: "LinkedIn",
+  deadline: "2026-09-05",
+  uni: "Univ of Melbourne",
+  country: "Australia",
+  requires: "SOP, Proposal, Refs",
+  remarks: "New area, fewer competitors",
+  profEmail: ""
+}, {
+  topic: "XR-based surgical skills training and assessment",
+  url: "https://ki.se/phd/xr-surgical-training",
+  source: "Uni site",
+  deadline: "2026-09-15",
+  uni: "Karolinska Inst",
+  country: "Sweden",
+  requires: "LoM, Proposal, Medical bg",
+  remarks: "Requires medical background",
+  profEmail: "a.lindqvist@ki.se"
+}, {
+  topic: "XAI for cardiac MRI segmentation and diagnosis",
+  url: "https://kaist.ac.kr/phd/xai-cardiac-mri",
+  source: "Uni site",
+  deadline: "2026-09-30",
+  uni: "KAIST",
+  country: "South Korea",
+  requires: "SOP, LoM, CV, TOEFL",
+  remarks: "Fully funded, KAIST scholarship",
+  profEmail: "h.kim@kaist.ac.kr"
+}, {
+  topic: "Remote sensing and ML for flood risk assessment",
+  url: "https://opportunitydesk.org/copenhagen-flood-risk",
+  source: "OpportunityDesk",
+  deadline: "2026-10-10",
+  uni: "Univ of Copenhagen",
+  country: "Denmark",
+  requires: "SOP, Proposal, CV",
+  remarks: "Prof already reached out",
+  profEmail: "n.jensen@ku.dk"
+}, {
+  topic: "Wearable ML for real-time cardiovascular monitoring",
+  url: "https://www.findaphd.com/phds/toronto-wearable-ml",
+  source: "FindAPhD",
+  deadline: "2026-11-01",
+  uni: "Univ of Toronto",
+  country: "Canada",
+  requires: "SOP, LoM, Proposal, CV",
+  remarks: "Excellent thesis fit",
+  profEmail: "l.chen@utoronto.ca"
+}, {
+  topic: "Tabular data augmentation for healthcare prediction",
+  url: "https://www.findaphd.com/phds/tabular-data-aug",
+  source: "FindAPhD",
+  deadline: "2026-11-10",
+  uni: "Univ of Glasgow",
+  country: "UK",
+  requires: "SOP, Proposal, CV, Refs",
+  remarks: "Data-centric ML, strong match",
+  profEmail: "d.wallace@glasgow.ac.uk"
+}, {
+  topic: "Explainable sensor analytics for industrial IoT",
+  url: "https://jobs.ac.uk/job/sensor-analytics-iot",
+  source: "jobs.ac.uk",
+  deadline: "2026-11-15",
+  uni: "Univ of Cambridge",
+  country: "UK",
+  requires: "SOP, LoM, CL, Proposal",
+  remarks: "Highly competitive, top uni",
+  profEmail: ""
+}, {
+  topic: "AR-based maintenance support using sensor data",
+  url: "https://www.phdportal.com/ar-maintenance-sensor",
+  source: "PhDPortal",
+  deadline: "2026-11-20",
+  uni: "KTH Stockholm",
+  country: "Sweden",
+  requires: "SOP, LoM, CV",
+  remarks: "Good AR and sensor overlap",
+  profEmail: "e.karlsson@kth.se"
+}, {
+  topic: "Multimodal stress prediction in workplace settings",
+  url: "https://www.scholarshipdb.net/stress-workplace",
+  source: "ScholarshipDB",
+  deadline: "2026-11-25",
+  uni: "Univ of Twente",
+  country: "Netherlands",
+  requires: "SOP, Proposal, CV, Refs",
+  remarks: "Almost identical to MSc thesis",
+  profEmail: "p.dejong@utwente.nl"
+}, {
+  topic: "Satellite SAR data for urban change detection",
+  url: "https://linkedin.com/jobs/satellite-sar-urban",
+  source: "LinkedIn",
+  deadline: "2026-11-30",
+  uni: "UCL",
+  country: "UK",
+  requires: "SOP, Proposal, CV, IELTS",
+  remarks: "SAR experience preferred",
+  profEmail: ""
+}, {
+  topic: "Privacy-preserving federated learning for health wearables",
+  url: "https://www.findaphd.com/phds/federated-health",
+  source: "FindAPhD",
+  deadline: "2026-12-01",
+  uni: "Univ of Oxford",
+  country: "UK",
+  requires: "SOP, LoM, Proposal, CV, GRE",
+  remarks: "Uni acceptance very low",
+  profEmail: "c.bennett@ox.ac.uk"
+}, {
+  topic: "Digital twin for smart building energy management",
+  url: "https://opportunitydesk.org/digital-twin-building",
+  source: "OpportunityDesk",
+  deadline: "2026-12-05",
+  uni: "DTU",
+  country: "Denmark",
+  requires: "SOP, CV, Refs",
+  remarks: "Sensor and IoT overlap",
+  profEmail: "t.andersen@dtu.dk"
+}, {
+  topic: "XAI methods for tabular clinical trial data",
+  url: "https://jobs.ac.uk/job/xai-tabular-clinical",
+  source: "jobs.ac.uk",
+  deadline: "2026-12-10",
+  uni: "King's College",
+  country: "UK",
+  requires: "SOP, Proposal, CL, CV",
+  remarks: "XAI and tabular, perfect match",
+  profEmail: "s.patel@kcl.ac.uk"
+}, {
+  topic: "LiDAR and satellite fusion for forest monitoring",
+  url: "https://www.phdportal.com/lidar-satellite-forest",
+  source: "PhDPortal",
+  deadline: "2026-12-15",
+  uni: "Wageningen Univ",
+  country: "Netherlands",
+  requires: "SOP, LoM, CV, IELTS",
+  remarks: "Remote sensing focus",
+  profEmail: ""
+}, {
+  topic: "Physiological sensor calibration using transfer learning",
+  url: "https://www.scholarshipdb.net/sensor-calibration-tl",
+  source: "ScholarshipDB",
+  deadline: "2026-12-20",
+  uni: "EPFL",
+  country: "Switzerland",
+  requires: "SOP, Proposal, CV",
+  remarks: "Sensor and ML, good fit",
+  profEmail: "m.dubois@epfl.ch"
+}, {
+  topic: "Agentic LLM systems for automated literature review",
+  url: "https://linkedin.com/jobs/agentic-llm-lit-review",
+  source: "LinkedIn",
+  deadline: "2026-12-28",
+  uni: "NUS",
+  country: "Singapore",
+  requires: "SOP, LoM, Proposal, CV",
+  remarks: "Emerging field, moderate competition",
+  profEmail: ""
+}, {
+  topic: "Mixed reality for physiotherapy rehabilitation",
+  url: "https://www.findaphd.com/phds/mr-physio-rehab",
+  source: "FindAPhD",
+  deadline: "2027-01-05",
+  uni: "Univ of Bath",
+  country: "UK",
+  requires: "SOP, Proposal, CV, Refs",
+  remarks: "XR and health, decent match",
+  profEmail: "k.oconnor@bath.ac.uk"
+}, {
+  topic: "Meta-heuristic optimisation for scheduling problems",
+  url: "https://www.phdportal.com/meta-heuristic-scheduling",
+  source: "PhDPortal",
+  deadline: "2027-01-10",
+  uni: "Univ of Bologna",
+  country: "Italy",
+  requires: "SOP, CV, Math bg",
+  remarks: "Topic mismatch, skip",
+  profEmail: ""
+}, {
+  topic: "EEG-based emotion detection using graph neural networks",
+  url: "https://jobs.ac.uk/job/eeg-emotion-gnn",
+  source: "jobs.ac.uk",
+  deadline: "2027-01-15",
+  uni: "Univ of Manchester",
+  country: "UK",
+  requires: "SOP, LoM, Proposal, CV",
+  remarks: "Strong sensor and ML overlap",
+  profEmail: "a.hughes@manchester.ac.uk"
+}, {
+  topic: "Satellite image super-resolution for disaster response",
+  url: "https://opportunitydesk.org/satellite-super-res",
+  source: "OpportunityDesk",
+  deadline: "2027-01-20",
+  uni: "Univ of Tokyo",
+  country: "Japan",
+  requires: "SOP, Proposal, CV, JLPT",
+  remarks: "Language barrier possible",
+  profEmail: ""
+}, {
+  topic: "Explainable AI for credit scoring on structured data",
+  url: "https://www.scholarshipdb.net/xai-credit-scoring",
+  source: "ScholarshipDB",
+  deadline: "2027-01-25",
+  uni: "TU Munich",
+  country: "Germany",
+  requires: "SOP, LoM, CV",
+  remarks: "XAI and tabular, strong match",
+  profEmail: "f.wagner@tum.de"
+}, {
+  topic: "IoT sensor networks for precision agriculture",
+  url: "https://www.findaphd.com/phds/iot-precision-agri",
+  source: "FindAPhD",
+  deadline: "2027-01-31",
+  uni: "Univ of Reading",
+  country: "UK",
+  requires: "SOP, Proposal, CV, Refs",
+  remarks: "Sensor focus, good overlap",
+  profEmail: "j.fairweather@reading.ac.uk"
+}, {
+  topic: "AR navigation for visually impaired users",
+  url: "https://linkedin.com/jobs/ar-navigation-visually-impaired",
+  source: "LinkedIn",
+  deadline: "2027-02-10",
+  uni: "MIT",
+  country: "USA",
+  requires: "SOP, LoM, Proposal, CV, GRE",
+  remarks: "Very competitive, GRE required",
+  profEmail: ""
+}, {
+  topic: "Stress biomarker discovery from wearable sensor streams",
+  url: "https://jobs.ac.uk/job/stress-biomarker-wearable",
+  source: "jobs.ac.uk",
+  deadline: "2027-02-15",
+  uni: "Univ of Bristol",
+  country: "UK",
+  requires: "SOP, Proposal, CV",
+  remarks: "Near-perfect thesis alignment",
+  profEmail: "r.stevens@bristol.ac.uk"
+}, {
+  topic: "Autonomous drone systems for satellite calibration",
+  url: "https://www.phdportal.com/drone-satellite-calibration",
+  source: "PhDPortal",
+  deadline: "2027-02-28",
+  uni: "Univ of Lisbon",
+  country: "Portugal",
+  requires: "SOP, LoM, CV",
+  remarks: "Partial topic overlap only",
+  profEmail: ""
+}, {
+  topic: "Multimodal data fusion for mental health monitoring",
+  url: "https://www.findaphd.com/phds/multimodal-mental-health",
+  source: "FindAPhD",
+  deadline: "2027-03-01",
+  uni: "Univ of Amsterdam",
+  country: "Netherlands",
+  requires: "SOP, LoM, Proposal, CV",
+  remarks: "Sensor fusion and health, great fit",
+  profEmail: "b.devries@uva.nl"
+}, {
+  topic: "Deep reinforcement learning for traffic signal control",
+  url: "https://opportunitydesk.org/drl-traffic-control",
+  source: "OpportunityDesk",
+  deadline: "2027-03-10",
+  uni: "Univ of Waterloo",
+  country: "Canada",
+  requires: "SOP, Proposal, CV, GRE",
+  remarks: "Topic mismatch, low priority",
+  profEmail: ""
+}];
+const DEFAULT_SOURCES = [{
+  id: "s1",
+  name: "FindAPhD",
+  url: "https://www.findaphd.com",
+  adapter: "undetected-chromedriver",
+  enabled: true,
+  note: "Primary aggregator"
+}, {
+  id: "s2",
+  name: "ScholarshipDB",
+  url: "https://www.scholarshipdb.net",
+  adapter: "undetected-chromedriver",
+  enabled: true,
+  note: ""
+}, {
+  id: "s3",
+  name: "jobs.ac.uk",
+  url: "https://www.jobs.ac.uk",
+  adapter: "rss",
+  enabled: true,
+  note: "RSS feed per discipline"
+}, {
+  id: "s4",
+  name: "OpportunityDesk",
+  url: "https://opportunitydesk.org",
+  adapter: "rss",
+  enabled: true,
+  note: ""
+}, {
+  id: "s5",
+  name: "Indeed",
+  url: "https://www.indeed.com",
+  adapter: "rss",
+  enabled: false,
+  note: "Noisy, mostly non-academic"
+}, {
+  id: "s6",
+  name: "PhDPortal",
+  url: "https://www.phdportal.com",
+  adapter: "requests+bs4",
+  enabled: true,
+  note: ""
+}, {
+  id: "s7",
+  name: "UniversityPositions.eu",
+  url: "https://www.universitypositions.eu",
+  adapter: "requests+bs4",
+  enabled: true,
+  note: ""
+}, {
+  id: "s8",
+  name: "LinkedIn",
+  url: "https://www.linkedin.com/jobs",
+  adapter: "playwright",
+  enabled: true,
+  note: "Login session required"
+}, {
+  id: "s9",
+  name: "Glassdoor",
+  url: "https://www.glassdoor.com",
+  adapter: "playwright",
+  enabled: false,
+  note: "Heavy bot detection"
+}, {
+  id: "s10",
+  name: "WhatsApp groups",
+  url: "local://clipboard",
+  adapter: "clipboard+vision",
+  enabled: true,
+  note: "Manual paste, Claude Vision parse"
+}];
+const ADAPTERS = ["requests+bs4", "rss", "playwright", "undetected-chromedriver", "clipboard+vision"];
+const BATCH = 100;
+const TODAY = new Date("2026-07-23");
+
+/* ---------------------------------------------------------------- helpers */
+function daysLeft(deadline) {
+  return Math.max(0, Math.round((new Date(deadline) - TODAY) / 86400000));
+}
+function fmtDate(iso) {
+  const d = new Date(iso);
+  return d.toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric"
+  });
+}
+function decorate(p) {
+  const a = p.assessment || null;
+  return {
+    ...p,
+    id: posId(p.url),
+    daysLeft: p.daysLeft ?? daysLeft(p.deadline),
+    assessment: a,
+    // Worth a calendar reminder when the assessed topic fit is live, rather
+    // than the old static chance field which no longer exists.
+    calendarEntry: a && !a.blocked && a.topicSimilarity >= 0.5 ? "Yes" : "No"
+  };
+}
+/* Headers stack onto separate lines so a two-word title does not force the
+   column wider than its data needs. */
+function StackedLabel({
+  label
+}) {
+  const words = label.split(" ");
+  return /*#__PURE__*/React.createElement("span", {
+    style: {
+      display: "inline-block",
+      lineHeight: 1.15
+    }
+  }, words.map((w, i) => /*#__PURE__*/React.createElement("span", {
+    key: i,
+    style: {
+      display: "block"
+    }
+  }, w)));
+}
+function cellText(row, key) {
+  if (key === "funding") return FUNDING_TEXT[row.funding] || "Not stated";
+  if (key === "deadline") return fmtDate(row.deadline);
+  if (key === "chance") {
+    const s = row.score;
+    if (!s) return "(blank)";
+    if (s.unavailable) return "Not assessed";
+    if (s.blocked) return "Not eligible";
+    if (s.pct >= 20) return "20% and above";
+    if (s.pct >= 10) return "10 to 20%";
+    if (s.pct >= 4) return "4 to 10%";
+    return "Under 4%";
+  }
+  const v = row[key];
+  return v === "" || v === null || v === undefined ? "(blank)" : String(v);
+}
+function docList(requires) {
+  return requires.split(",").map(s => s.trim()).filter(Boolean);
+}
+/* ---------------------------------------------------------------- scoring */
+/* The probability model lives in the backend, in one place. This file applies
+   only the supervisor multiplier, using constants the backend ships at
+   /api/public/scoring-config.
+
+   The previous build ran a full second copy of the model here. Two
+   implementations of one model drift apart silently: changing a weight in one
+   is not a change in the other, and nothing fails loudly when they disagree.
+   Everything below is arithmetic on numbers the backend computed. */
+
+const FALLBACK_CONFIG = {
+  replyMultipliers: {
+    positive: 2.6,
+    neutral: 1.35,
+    none_yet: 1.0,
+    no_reply: 0.72,
+    discouraging: 0.25
+  },
+  intakeMultipliers: {
+    recent: 1.3,
+    unknown: 1.0,
+    none_recent: 0.65
+  },
+  bandSpread: {
+    low: 0.65,
+    medium: 0.45,
+    high: 0.28
+  },
+  replyLabels: {
+    none_yet: "Not contacted",
+    positive: "Replied, encouraging",
+    neutral: "Replied, neutral",
+    no_reply: "No reply",
+    discouraging: "Discouraging reply"
+  },
+  intakeLabels: {
+    unknown: "Intake unknown",
+    recent: "Took students recently",
+    none_recent: "No recent intake"
+  }
+};
+function supervisorEvidenceCount(sup) {
+  let n = 0;
+  if (sup.reply && sup.reply !== "none_yet") n++;
+  if (sup.intake && sup.intake !== "unknown") n++;
+  return n;
+}
+
+/* Combine the backend's odds with the user's supervisor signals. */
+function applySupervisor(assessment, sup, cfg) {
+  // No assessment means the backend was unreachable, which is not the same as
+  // a zero score. Showing 0% for a position we simply could not assess would
+  // be a claim we have not earned.
+  if (!assessment) {
+    return {
+      unavailable: true,
+      pct: null,
+      low: null,
+      high: null,
+      confidence: "unknown",
+      blocked: false,
+      reasons: [],
+      applicants: 0,
+      fit: 1,
+      soft: 1,
+      sup: 1,
+      areas: [],
+      penalties: [],
+      topicSimilarity: 0,
+      methodAssessed: false,
+      tierKnown: false
+    };
+  }
+  const a = assessment;
+  if (a.blocked) {
+    return {
+      pct: 0,
+      low: 0,
+      high: 0,
+      confidence: "high",
+      blocked: true,
+      reasons: a.blockReasons || [],
+      applicants: a.estimatedApplicants || 0,
+      fit: 0,
+      soft: a.softMultiplier ?? 1,
+      sup: 1,
+      areas: a.matchedAreas || [],
+      penalties: a.softPenalties || [],
+      topicSimilarity: a.topicSimilarity ?? 0,
+      methodAssessed: a.methodAssessed !== false,
+      tierKnown: a.uniTierKnown !== false
+    };
+  }
+  const reply = sup.reply || "none_yet";
+  const intake = sup.intake || "unknown";
+  const supMult = (cfg.replyMultipliers[reply] ?? 1) * (cfg.intakeMultipliers[intake] ?? 1);
+  const odds = (a.scoreOdds ?? 0) * supMult;
+  const p = odds / (1 + odds);
+  const ev = supervisorEvidenceCount({
+    reply,
+    intake
+  });
+  const confidence = ev >= 2 ? "high" : ev >= 1 ? "medium" : "low";
+  const spread = Math.min(0.85, (cfg.bandSpread[confidence] ?? 0.65) * (a.bandWidening ?? 1));
+  return {
+    pct: +(p * 100).toFixed(1),
+    low: +(p * 100 * (1 - spread)).toFixed(1),
+    high: +Math.min(95, p * 100 * (1 + spread)).toFixed(1),
+    confidence,
+    blocked: false,
+    reasons: [],
+    applicants: a.estimatedApplicants ?? 0,
+    fit: a.profileMultiplier ?? 1,
+    soft: a.softMultiplier ?? 1,
+    sup: +supMult.toFixed(2),
+    areas: a.matchedAreas || [],
+    penalties: a.softPenalties || [],
+    topicSimilarity: a.topicSimilarity ?? 0,
+    methodAssessed: a.methodAssessed !== false,
+    tierKnown: a.uniTierKnown !== false
+  };
+}
+
+/* Colour by band, not by point estimate. A 12% with a wide band and a 12%
+   backed by a logged reply are not the same claim. */
+function scoreBadge(s) {
+  if (s.blocked) return {
+    bg: "#E7E4DC",
+    fg: "#57544C"
+  };
+  if (s.pct >= 20) return {
+    bg: "#EAF3DE",
+    fg: "#27500A"
+  };
+  if (s.pct >= 10) return {
+    bg: "#EDEFF2",
+    fg: "#3E4C59"
+  };
+  if (s.pct >= 4) return {
+    bg: "#F4E9E9",
+    fg: "#791F1F"
+  };
+  return {
+    bg: "#F1EFE8",
+    fg: "#57544C"
+  };
+}
+
+/* Funding is drawn rather than written, because the column has to stay narrow
+   and the state is one of four. Hovering gives the words. */
+function FundingIcon({
+  level
+}) {
+  const spec = {
+    full: {
+      fill: 1.0,
+      stroke: "#27500A",
+      body: "#EAF3DE",
+      label: "Fully funded"
+    },
+    partial: {
+      fill: 0.5,
+      stroke: "#7A5210",
+      body: "#FAEEDA",
+      label: "Partially funded: check what is covered"
+    },
+    none: {
+      fill: 0.0,
+      stroke: "#791F1F",
+      body: "#FCEBEB",
+      label: "Not funded: self-funded"
+    },
+    unknown: {
+      fill: 0.0,
+      stroke: "#8C8880",
+      body: "transparent",
+      label: "Funding not stated in the advert"
+    }
+  }[level] || {
+    fill: 0,
+    stroke: "#8C8880",
+    body: "transparent",
+    label: "Funding not stated"
+  };
+  const h = 11,
+    y = 13 - h * spec.fill;
+  return /*#__PURE__*/React.createElement("span", {
+    title: spec.label,
+    "aria-label": spec.label,
+    role: "img",
+    style: {
+      display: "inline-flex",
+      alignItems: "center",
+      justifyContent: "center"
+    }
+  }, /*#__PURE__*/React.createElement("svg", {
+    width: "17",
+    height: "16",
+    viewBox: "0 0 17 16",
+    "aria-hidden": "true"
+  }, /*#__PURE__*/React.createElement("path", {
+    d: "M2 5.2 C2 4.2 2.7 3.4 3.7 3.4 H13.3 C14.3 3.4 15 4.2 15 5.2 V12.4 C15 13.2 14.4 13.8 13.6 13.8 H3.4 C2.6 13.8 2 13.2 2 12.4 Z",
+    fill: spec.body,
+    stroke: spec.stroke,
+    strokeWidth: "1.1"
+  }), spec.fill > 0 && /*#__PURE__*/React.createElement("rect", {
+    x: "2.6",
+    y: y,
+    width: "11.8",
+    height: h * spec.fill,
+    fill: spec.stroke,
+    opacity: "0.45"
+  }), /*#__PURE__*/React.createElement("path", {
+    d: "M2.4 6.6 H14.6",
+    stroke: spec.stroke,
+    strokeWidth: "1"
+  }), /*#__PURE__*/React.createElement("rect", {
+    x: "7.1",
+    y: "5.4",
+    width: "2.8",
+    height: "3.1",
+    rx: "0.6",
+    fill: spec.stroke
+  }), level === "none" && /*#__PURE__*/React.createElement("path", {
+    d: "M3.4 3.0 L13.8 14.2",
+    stroke: "#791F1F",
+    strokeWidth: "1.6",
+    strokeLinecap: "round"
+  }), level === "unknown" && /*#__PURE__*/React.createElement("text", {
+    x: "8.5",
+    y: "11.4",
+    fontSize: "7",
+    fontWeight: "700",
+    textAnchor: "middle",
+    fill: spec.stroke
+  }, "?")));
+}
+const FUNDING_TEXT = {
+  full: "Fully funded",
+  partial: "Partially funded",
+  none: "Not funded",
+  unknown: "Not stated"
+};
+const GRADE_LABEL = {
+  strong: "strong evidence",
+  moderate_strong: "good evidence",
+  moderate: "some evidence",
+  aspirational: "interest only"
+};
+const GRADE_COLOR = {
+  strong: "#27500A",
+  moderate_strong: "#3B6D11",
+  moderate: "#633806",
+  aspirational: "#791F1F"
+};
+const INITIAL_ROWS = POSITIONS.map(decorate);
+const STATUS_OPTS = [{
+  val: "none",
+  label: "Not applied",
+  fg: "#57544C",
+  bg: "#F1EFE8",
+  dot: "#B4B2A9"
+}, {
+  val: "rejected",
+  label: "Rejected",
+  fg: "#57544C",
+  bg: "#E7E4DC",
+  dot: "#8C8880"
+}, {
+  val: "applied",
+  label: "Applied",
+  fg: "#0C447C",
+  bg: "#E6F1FB",
+  dot: "#378ADD"
+}, {
+  val: "offer",
+  label: "Offer",
+  fg: "#27500A",
+  bg: "#EAF3DE",
+  dot: "#639922"
+}];
+const STATUS_LABEL = Object.fromEntries(STATUS_OPTS.map(o => [o.val, o.label]));
+// Save sends stored values, the table renders labels. Keeping both derived
+// from one list stops them drifting when an option is added.
+const STATUS_VALUE = Object.fromEntries(STATUS_OPTS.map(o => [o.label, o.val]));
+
+/* Row visual precedence: terminal outcomes win over urgency, because once a
+   position is decided or blocked the deadline no longer needs your attention. */
+function rowVisual(statusVal, hasIssue, days, blocked) {
+  if (statusVal === "offer") return {
+    bg: "#EAF3DE",
+    fg: "#1F3D08",
+    bold: true
+  };
+  if (statusVal === "rejected" || hasIssue || blocked) return {
+    bg: "transparent",
+    fg: "#8C8880",
+    bold: false,
+    muted: true
+  };
+  if (days <= 7) return {
+    bg: "#FBEAEA",
+    fg: "#6E1C1C",
+    bold: true
+  };
+  return {
+    bg: "transparent",
+    fg: "var(--text-primary)",
+    bold: false
+  };
+}
+const COLS = [{
+  key: "ser",
+  label: "Ser",
+  w: 34,
+  align: "center",
+  type: "num",
+  sort: true
+}, {
+  key: "topic",
+  label: "PhD topic",
+  w: 220,
+  align: "left",
+  type: "text",
+  sort: true,
+  filter: true,
+  search: true
+}, {
+  key: "funding",
+  label: "Funding",
+  w: 52,
+  align: "center",
+  type: "text",
+  sort: true,
+  filter: true
+}, {
+  key: "source",
+  label: "Source",
+  w: 74,
+  align: "left",
+  type: "text",
+  sort: true,
+  filter: true,
+  search: true
+}, {
+  key: "deadline",
+  label: "Deadline",
+  w: 84,
+  align: "left",
+  type: "date",
+  sort: true,
+  filter: true,
+  search: true
+}, {
+  key: "uni",
+  label: "Uni",
+  w: 122,
+  align: "left",
+  type: "text",
+  sort: true,
+  filter: true,
+  search: true
+}, {
+  key: "country",
+  label: "Country",
+  w: 72,
+  align: "left",
+  type: "text",
+  sort: true,
+  filter: true,
+  search: true
+}, {
+  key: "chance",
+  label: "Success chance",
+  w: 76,
+  align: "center",
+  type: "num",
+  sort: true,
+  filter: true
+}, {
+  key: "daysLeft",
+  label: "Days left",
+  w: 52,
+  align: "center",
+  type: "num",
+  sort: true
+}, {
+  key: "calendarEntry",
+  label: "Calendar entry",
+  w: 62,
+  align: "center",
+  type: "text",
+  sort: true,
+  filter: true
+}, {
+  key: "requires",
+  label: "Requires",
+  w: 140,
+  align: "left",
+  type: "text",
+  filter: true,
+  search: true
+}, {
+  key: "profEmail",
+  label: "Prof email",
+  w: 158,
+  align: "left",
+  type: "text",
+  filter: true,
+  search: true
+}, {
+  key: "remarks",
+  label: "Remarks",
+  w: 140,
+  align: "left",
+  type: "text",
+  filter: true,
+  search: true
+}, {
+  key: "notes",
+  label: "My notes",
+  w: 150,
+  align: "left",
+  type: "text",
+  search: true
+}, {
+  key: "status",
+  label: "Status",
+  w: 146,
+  align: "center",
+  type: "text",
+  sort: true,
+  filter: true
+}];
+const TABLE_MIN = COLS.reduce((a, c) => a + c.w, 0) + 20;
+
+/* ================================================================ component */
+function PhDTracker({
+  authUser = null,
+  onSignOut = null
+}) {
+  const [rows, setRows] = useState(INITIAL_ROWS);
+  const [statusMap, setStatusMap] = useState({});
+  const [issueMap, setIssueMap] = useState({});
+  const [archived, setArchived] = useState({});
+  const [deleted, setDeleted] = useState({});
+  const [notesMap, setNotesMap] = useState({});
+  const [emailMap, setEmailMap] = useState({});
+  const [docsMap, setDocsMap] = useState({});
+  const [filters, setFilters] = useState({});
+  const [filterSearch, setFilterSearch] = useState({});
+  const [colSearch, setColSearch] = useState({});
+  const [openFilter, setOpenFilter] = useState(null);
+  const [sortCol, setSortCol] = useState("deadline");
+  const [sortDir, setSortDir] = useState("asc");
+  const [visibleCount, setVisibleCount] = useState(BATCH);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selected, setSelected] = useState(new Set());
+  const [view, setView] = useState("active");
+  const [newIds, setNewIds] = useState(new Set());
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastSync, setLastSync] = useState(null);
+  const [sources, setSources] = useState(DEFAULT_SOURCES);
+  const [showSources, setShowSources] = useState(false);
+  const [editingSource, setEditingSource] = useState(null);
+  const [loaded, setLoaded] = useState(false);
+  const [showFeedback, setShowFeedback] = useState(false);
+  const [showIntro, setShowIntro] = useState(true);
+  const [supMap, setSupMap] = useState({});
+  const [openScore, setOpenScore] = useState(null);
+  const [scoringCfg, setScoringCfg] = useState(FALLBACK_CONFIG);
+  const [backendUp, setBackendUp] = useState(true);
+
+  /* Unsaved edits. Every change writes to local state immediately so the UI
+     stays responsive, and records the position id here. Nothing reaches the
+     server until Save. Writing on each keystroke put a network round trip
+     behind every character typed into a notes field, and lost text whenever
+     the connection blipped mid-sentence. */
+  /* Text fields commit on blur, so nothing sits unsaved except a field the
+     user is typing in right now. This flag covers only that one case: closing
+     the tab mid-sentence, before focus has left the box. */
+  const [editingUnsaved, setEditingUnsaved] = useState(false);
+  const [showProfile, setShowProfile] = useState(false);
+  const [showAdmin, setShowAdmin] = useState(false);
+  const [user, setUser] = useState(authUser);
+  const sentinelRef = useRef(null);
+
+  /* ------------------------------------------------------------ persistence */
+  useEffect(() => {
+    (async () => {
+      // Load personal state from browser storage
+      const keys = [["phd_status", setStatusMap], ["phd_issue", setIssueMap], ["phd_archived", setArchived], ["phd_deleted", setDeleted], ["phd_notes", setNotesMap], ["phd_emails", setEmailMap], ["phd_docs", setDocsMap], ["phd_sources", setSources], ["phd_supervisor", setSupMap]];
+      for (const [k, setter] of keys) {
+        try {
+          const r = await window.storage?.get(k, false);
+          if (r?.value) setter(JSON.parse(r.value));
+        } catch (e) {/* nothing saved yet */}
+      }
+
+      // Scores are computed server-side, so both the position list and the
+      // supervisor constants come from the backend.
+      try {
+        const [posRes, cfgRes] = await Promise.all([fetch(`${API_BASE}/api/positions`, {
+          credentials: "include"
+        }).then(r => r.ok ? r : fetch(`${API_BASE}/api/public/positions`)), fetch(`${API_BASE}/api/public/scoring-config`)]);
+        if (cfgRes.ok) setScoringCfg(await cfgRes.json());
+        if (posRes.ok) {
+          setRows((await posRes.json()).map(decorate));
+          setBackendUp(true);
+        } else {
+          setBackendUp(false);
+        }
+      } catch (e) {
+        // Unreachable. Sample rows still render, but without scores, and the
+        // banner says so rather than showing zeroes.
+        setBackendUp(false);
+      }
+      setLoaded(true);
+    })();
+  }, []);
+  const persist = (key, value) => {
+    window.storage?.set(key, JSON.stringify(value), false).catch(() => {});
+  };
+
+  /* Latest state for the field-save helper, held in refs so the callback does
+     not depend on every map and get rebuilt on each render. */
+  const rowsRef = useRef(rows);
+  const statusMapRef = useRef(statusMap);
+  const issueMapRef = useRef(issueMap);
+  const archivedRef = useRef(archived);
+  const deletedRef = useRef(deleted);
+  const notesMapRef = useRef(notesMap);
+  const emailMapRef = useRef(emailMap);
+  const docsMapRef = useRef(docsMap);
+  const supMapRef = useRef(supMap);
+  const userRef = useRef(user);
+  rowsRef.current = rows;
+  statusMapRef.current = statusMap;
+  issueMapRef.current = issueMap;
+  archivedRef.current = archived;
+  deletedRef.current = deleted;
+  notesMapRef.current = notesMap;
+  emailMapRef.current = emailMap;
+  docsMapRef.current = docsMap;
+  supMapRef.current = supMap;
+  userRef.current = user;
+
+  /* Save one position's current state. Discrete controls call this straight
+     after their click; text fields call it on blur. There is no batching and
+     no save button, because nothing is ever left in an unsaved state: a tap is
+     a complete action, and leaving a text field commits it.
+      Signed-in users write to the server, anonymous visitors to browser
+     storage, along the same path, so the two builds behave identically apart
+     from where the bytes land. */
+  const saveField = useCallback((id, stores) => {
+    const row = rowsRef.current.find(r => r.id === id);
+    if (userRef.current && row) {
+      const sup = supMapRef.current[id] || {};
+      const changes = {
+        [row.uid]: {
+          status: statusMapRef.current[id] || "none",
+          hasIssue: !!issueMapRef.current[id],
+          isArchived: !!archivedRef.current[id],
+          isDeleted: !!deletedRef.current[id],
+          notes: notesMapRef.current[id] || "",
+          profEmail: emailMapRef.current[id] ?? "",
+          docsDone: docsMapRef.current[id] || {},
+          supervisorReply: sup.reply || "none_yet",
+          supervisorIntake: sup.intake || "unknown"
+        }
+      };
+      fetch(`${API_BASE}/api/positions/save`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        credentials: "include",
+        body: JSON.stringify({
+          changes
+        })
+      }).catch(() => {/* value stays on screen; blur or next click retries */});
+    } else {
+      // Anonymous: write only the store that actually changed. Writing all
+      // eight on every keystroke-ending blur would be seven pointless writes.
+      const ALL = {
+        phd_status: statusMapRef,
+        phd_issue: issueMapRef,
+        phd_archived: archivedRef,
+        phd_deleted: deletedRef,
+        phd_notes: notesMapRef,
+        phd_emails: emailMapRef,
+        phd_docs: docsMapRef,
+        phd_supervisor: supMapRef
+      };
+      const keys = stores && stores.length ? stores : Object.keys(ALL);
+      keys.forEach(k => {
+        if (ALL[k]) persist(k, ALL[k].current);
+      });
+    }
+  }, []);
+  const bulkFlag = useCallback((setter, key, ids, value) => {
+    setter(prev => {
+      const next = {
+        ...prev
+      };
+      ids.forEach(id => {
+        if (value) next[id] = true;else delete next[id];
+      });
+      persist(key, next);
+      return next;
+    });
+  }, []);
+
+  /* Discrete controls: update local state, then save that one position. */
+  const setStatus = useCallback((id, v) => {
+    setStatusMap(prev => ({
+      ...prev,
+      [id]: v
+    }));
+    queueMicrotask(() => saveField(id, ["phd_status"]));
+  }, [saveField]);
+  const toggleIssue = useCallback(id => {
+    setIssueMap(prev => {
+      const next = {
+        ...prev
+      };
+      if (next[id]) delete next[id];else next[id] = true;
+      return next;
+    });
+    queueMicrotask(() => saveField(id, ["phd_issue"]));
+  }, [saveField]);
+  const toggleArchive = useCallback(id => {
+    setArchived(prev => {
+      const next = {
+        ...prev
+      };
+      if (next[id]) delete next[id];else next[id] = true;
+      return next;
+    });
+    queueMicrotask(() => saveField(id, ["phd_archived"]));
+  }, [saveField]);
+  const setSupervisor = useCallback((id, patch) => {
+    setSupMap(prev => ({
+      ...prev,
+      [id]: {
+        ...(prev[id] || {}),
+        ...patch
+      }
+    }));
+    queueMicrotask(() => saveField(id, ["phd_supervisor"]));
+  }, [saveField]);
+  const toggleDoc = useCallback((id, doc) => {
+    setDocsMap(prev => {
+      const forRow = {
+        ...(prev[id] || {})
+      };
+      if (forRow[doc]) delete forRow[doc];else forRow[doc] = true;
+      const next = {
+        ...prev,
+        [id]: forRow
+      };
+      if (Object.keys(forRow).length === 0) delete next[id];
+      return next;
+    });
+    queueMicrotask(() => saveField(id, ["phd_docs"]));
+  }, [saveField]);
+
+  /* Text fields: update local state on each keystroke (no network), and save
+     once on blur. The blur handler is wired at the input, not here. */
+  const setNote = useCallback((id, v) => {
+    setNotesMap(prev => ({
+      ...prev,
+      [id]: v
+    }));
+  }, []);
+  const setEmail = useCallback((id, v) => {
+    setEmailMap(prev => ({
+      ...prev,
+      [id]: v
+    }));
+  }, []);
+
+  /* ------------------------------------------------------------ bulk actions */
+  const archiveSelected = useCallback(() => {
+    if (!selected.size) return;
+    bulkFlag(setArchived, "phd_archived", Array.from(selected), true);
+    setSelected(new Set());
+  }, [selected, bulkFlag]);
+  const deleteSelected = useCallback(() => {
+    if (!selected.size) return;
+    bulkFlag(setDeleted, "phd_deleted", Array.from(selected), true);
+    setSelected(new Set());
+  }, [selected, bulkFlag]);
+  const restoreSelected = useCallback(() => {
+    if (!selected.size) return;
+    const ids = Array.from(selected);
+    bulkFlag(setArchived, "phd_archived", ids, false);
+    bulkFlag(setDeleted, "phd_deleted", ids, false);
+    setSelected(new Set());
+  }, [selected, bulkFlag]);
+  const toggleSelect = useCallback(id => {
+    setSelected(prev => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id);else n.add(id);
+      return n;
+    });
+  }, []);
+
+  /* Everything commits on click or on blur, so the only thing that can be
+     lost is the field the cursor is sitting in right now. The listener is
+     registered only in that window, so a normal close is never interrupted. */
+  useEffect(() => {
+    if (!editingUnsaved) return;
+    const warn = e => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [editingUnsaved]);
+
+  /* ------------------------------------------------------------ refresh/export */
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/positions`, {
+        credentials: "include"
+      }).then(r => r.ok ? r : fetch(`${API_BASE}/api/public/positions`));
+      if (res.ok) {
+        const data = await res.json();
+        const incoming = data.map(decorate);
+        setRows(prev => {
+          const byId = new Map(prev.map(r => [r.id, r]));
+          const added = new Set();
+          incoming.forEach(inc => {
+            const ex = byId.get(inc.id);
+            if (ex) byId.set(inc.id, {
+              ...ex,
+              ...inc
+            });else {
+              byId.set(inc.id, inc);
+              added.add(inc.id);
+            }
+          });
+          setNewIds(added);
+          return Array.from(byId.values());
+        });
+      }
+    } catch (e) {
+      // offline, keep existing rows
+    }
+    setLastSync(new Date());
+    setRefreshing(false);
+  }, []);
+  const processedRef = useRef([]);
+  const handleExport = useCallback(() => {
+    const data = processedRef.current.map((r, i) => {
+      const docs = docList(r.requires);
+      const done = docs.filter(d => docsMap[r.id]?.[d]).length;
+      return {
+        "Ser": i + 1,
+        "PhD topic": r.topic,
+        "Ad URL": r.url,
+        "Source": r.source,
+        "Deadline": fmtDate(r.deadline),
+        "Uni": r.uni,
+        "Country": r.country,
+        "Success %": r.score?.unavailable ? "not assessed" : r.score?.blocked ? "not eligible" : r.score?.pct,
+        "Range low %": r.score?.blocked || r.score?.unavailable ? "" : r.score?.low,
+        "Range high %": r.score?.blocked || r.score?.unavailable ? "" : r.score?.high,
+        "Confidence": r.score?.confidence ?? "",
+        "Est. applicants": r.score?.applicants ?? "",
+        "Blocked because": (r.score?.reasons || []).join("; "),
+        "Days left": r.daysLeft,
+        "Calendar entry": r.calendarEntry,
+        "Requires": r.requires,
+        "Docs ready": `${done}/${docs.length}`,
+        "Prof email": r.profEmail,
+        "Remarks": r.remarks,
+        "My notes": r.notes,
+        "Status": r.status,
+        "Issue flagged": issueMap[r.id] ? "Yes" : "No",
+        "Archived": archived[r.id] ? "Yes" : "No"
+      };
+    });
+    const ws = XLSX.utils.json_to_sheet(data);
+    ws["!cols"] = [{
+      wch: 5
+    }, {
+      wch: 50
+    }, {
+      wch: 44
+    }, {
+      wch: 15
+    }, {
+      wch: 13
+    }, {
+      wch: 20
+    }, {
+      wch: 13
+    }, {
+      wch: 9
+    }, {
+      wch: 9
+    }, {
+      wch: 14
+    }, {
+      wch: 26
+    }, {
+      wch: 11
+    }, {
+      wch: 30
+    }, {
+      wch: 30
+    }, {
+      wch: 34
+    }, {
+      wch: 13
+    }, {
+      wch: 13
+    }, {
+      wch: 10
+    }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "PhD positions");
+    XLSX.writeFile(wb, `phd_positions_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  }, [docsMap, issueMap, archived]);
+
+  /* ------------------------------------------------------------ source CRUD */
+  const saveSource = src => {
+    setSources(prev => {
+      const exists = prev.some(s => s.id === src.id);
+      const next = exists ? prev.map(s => s.id === src.id ? src : s) : [...prev, src];
+      persist("phd_sources", next);
+      return next;
+    });
+    setEditingSource(null);
+  };
+  const deleteSource = id => {
+    setSources(prev => {
+      const next = prev.filter(s => s.id !== id);
+      persist("phd_sources", next);
+      return next;
+    });
+  };
+  const toggleSourceEnabled = id => {
+    setSources(prev => {
+      const next = prev.map(s => s.id === id ? {
+        ...s,
+        enabled: !s.enabled
+      } : s);
+      persist("phd_sources", next);
+      return next;
+    });
+  };
+
+  /* ------------------------------------------------------------ derivation */
+  const enrichedRows = useMemo(() => rows.map(r => {
+    const score = applySupervisor(r.assessment, supMap[r.id] || {}, scoringCfg);
+    return {
+      ...r,
+      status: STATUS_LABEL[statusMap[r.id] || "none"],
+      profEmail: emailMap[r.id] ?? r.profEmail ?? "",
+      notes: notesMap[r.id] || "",
+      isArchived: !!archived[r.id],
+      isDeleted: !!deleted[r.id],
+      hasIssue: !!issueMap[r.id],
+      score,
+      // Sortable numeric mirror of the score. Unassessed rows sort last
+      // rather than tying with genuine zeros.
+      chance: score.unavailable ? -1 : score.pct
+    };
+  }), [rows, statusMap, emailMap, notesMap, archived, deleted, issueMap, supMap, scoringCfg]);
+  const viewFiltered = useMemo(() => {
+    if (view === "active") return enrichedRows.filter(r => !r.isArchived && !r.isDeleted);
+    if (view === "archived") return enrichedRows.filter(r => r.isArchived && !r.isDeleted);
+    if (view === "deleted") return enrichedRows.filter(r => r.isDeleted);
+    return enrichedRows;
+  }, [enrichedRows, view]);
+  const viewRef = useRef(viewFiltered);
+  viewRef.current = viewFiltered;
+  const summary = useMemo(() => {
+    const active = enrichedRows.filter(r => !r.isArchived && !r.isDeleted);
+    let applied = 0,
+      rejected = 0,
+      offer = 0,
+      issues = 0;
+    active.forEach(r => {
+      const s = statusMap[r.id] || "none";
+      if (s === "applied") applied++;else if (s === "rejected") rejected++;else if (s === "offer") offer++;
+      if (r.hasIssue) issues++;
+    });
+    const total = active.length;
+    const notApplied = total - (applied + rejected + offer);
+    const decided = rejected + offer;
+    return {
+      total,
+      notApplied,
+      awaiting: applied,
+      rejected,
+      offer,
+      issues,
+      decided,
+      successRate: decided > 0 ? Math.round(offer / decided * 100) : 0,
+      archivedCount: enrichedRows.filter(r => r.isArchived && !r.isDeleted).length,
+      deletedCount: enrichedRows.filter(r => r.isDeleted).length
+    };
+  }, [enrichedRows, statusMap]);
+  const processed = useMemo(() => {
+    let data = [...viewFiltered];
+    Object.entries(filters).forEach(([k, set]) => {
+      data = data.filter(r => set.has(cellText(r, k)));
+    });
+    Object.entries(colSearch).forEach(([k, term]) => {
+      const q = term.trim().toLowerCase();
+      if (!q) return;
+      data = data.filter(r => cellText(r, k).toLowerCase().includes(q));
+    });
+    const col = COLS.find(c => c.key === sortCol);
+    data.sort((a, b) => {
+      let va = a[sortCol],
+        vb = b[sortCol];
+      if (col?.type === "num") return sortDir === "asc" ? va - vb : vb - va;
+      if (col?.type === "date") return sortDir === "asc" ? new Date(va) - new Date(vb) : new Date(vb) - new Date(va);
+      va = String(va).toLowerCase();
+      vb = String(vb).toLowerCase();
+      return sortDir === "asc" ? va.localeCompare(vb) : vb.localeCompare(va);
+    });
+    return data;
+  }, [viewFiltered, filters, colSearch, sortCol, sortDir]);
+  processedRef.current = processed;
+  const visible = processed.slice(0, visibleCount);
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(e => {
+      if (e[0].isIntersecting && visibleCount < processed.length) {
+        setVisibleCount(p => Math.min(p + BATCH, processed.length));
+      }
+    }, {
+      threshold: 0.1
+    });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [visibleCount, processed.length]);
+
+  /* ------------------------------------------------------------ filter ops */
+  const toggleValueInFilter = (key, value) => {
+    setFilters(prev => {
+      const all = new Set(viewRef.current.map(r => cellText(r, key)));
+      const base = prev[key] ? new Set(prev[key]) : new Set(all);
+      if (base.has(value)) base.delete(value);else base.add(value);
+      const next = {
+        ...prev
+      };
+      if (base.size === all.size) delete next[key];else next[key] = base;
+      return next;
+    });
+  };
+  const clearColumnFilter = key => setFilters(p => {
+    const n = {
+      ...p
+    };
+    delete n[key];
+    return n;
+  });
+  const toggleSort = key => {
+    if (sortCol === key) setSortDir(d => d === "asc" ? "desc" : "asc");else {
+      setSortCol(key);
+      setSortDir("asc");
+    }
+  };
+  const activeSearches = Object.values(colSearch).filter(v => v && v.trim()).length;
+  const activeFilters = Object.keys(filters).length + activeSearches;
+
+  /* ------------------------------------------------------------ styles */
+  const btn = {
+    background: "var(--surface-1)",
+    color: "var(--text-primary)",
+    border: "0.5px solid var(--border-strong)",
+    borderRadius: "var(--radius)",
+    padding: "5px 10px",
+    fontSize: 12,
+    cursor: "pointer",
+    whiteSpace: "nowrap"
+  };
+  const thStyle = {
+    padding: 0,
+    textAlign: "left",
+    fontWeight: 500,
+    color: "var(--text-secondary)",
+    fontSize: 11,
+    letterSpacing: "0.3px",
+    position: "sticky",
+    top: 0,
+    background: "var(--surface-1)",
+    zIndex: 2,
+    verticalAlign: "top",
+    borderBottom: "1px solid var(--border-strong)"
+  };
+  const tdBase = {
+    padding: "7px 6px",
+    fontSize: 12,
+    verticalAlign: "top",
+    borderBottom: "0.5px solid var(--border)"
+  };
+  const SUMMARY_CARDS = [{
+    label: "Total",
+    value: summary.total,
+    bg: "#F1EFE8",
+    fg: "#3D3A34",
+    filterVal: null
+  }, {
+    label: "Not applied (pending)",
+    value: summary.notApplied,
+    bg: "#EDEBE3",
+    fg: "#57544C",
+    filterVal: "Not applied"
+  }, {
+    label: "Applied (awaiting)",
+    value: summary.awaiting,
+    bg: "#E6F1FB",
+    fg: "#0C447C",
+    filterVal: "Applied"
+  }, {
+    label: "Rejected",
+    value: summary.rejected,
+    bg: "#E7E4DC",
+    fg: "#57544C",
+    filterVal: "Rejected"
+  }, {
+    label: "Offers",
+    value: summary.offer,
+    bg: "#EAF3DE",
+    fg: "#27500A",
+    filterVal: "Offer"
+  }, {
+    label: "Success rate",
+    value: `${summary.successRate}%`,
+    bg: "#DCEBCB",
+    fg: "#1F3D08",
+    sub: `${summary.offer}/${summary.decided} decided`,
+    filterVal: undefined
+  }];
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: "var(--font-sans)",
+      padding: "0.5rem 0"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "flex-start",
+      marginBottom: 12,
+      gap: 12,
+      flexWrap: "wrap"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 6,
+      flexWrap: "wrap"
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      setSelectMode(m => !m);
+      setSelected(new Set());
+    },
+    style: {
+      ...btn,
+      background: selectMode ? "var(--bg-accent)" : "var(--surface-1)",
+      color: selectMode ? "var(--text-accent)" : "var(--text-primary)"
+    }
+  }, selectMode ? `Selecting (${selected.size})` : "Select"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "inline-flex",
+      border: "0.5px solid var(--border-strong)",
+      borderRadius: "var(--radius)",
+      overflow: "hidden"
+    }
+  }, [{
+    val: "active",
+    label: "Active"
+  }, {
+    val: "archived",
+    label: `Archived${summary.archivedCount ? ` (${summary.archivedCount})` : ""}`
+  }, {
+    val: "deleted",
+    label: `Trash${summary.deletedCount ? ` (${summary.deletedCount})` : ""}`
+  }].map((v, i) => /*#__PURE__*/React.createElement("button", {
+    key: v.val,
+    onClick: () => {
+      setView(v.val);
+      setSelected(new Set());
+    },
+    style: {
+      background: view === v.val ? "var(--bg-accent)" : "var(--surface-1)",
+      color: view === v.val ? "var(--text-accent)" : "var(--text-secondary)",
+      border: "none",
+      borderLeft: i === 0 ? "none" : "0.5px solid var(--border)",
+      padding: "5px 10px",
+      fontSize: 12,
+      cursor: "pointer",
+      fontWeight: view === v.val ? 500 : 400
+    }
+  }, v.label))), selectMode && view !== "archived" && view !== "deleted" && /*#__PURE__*/React.createElement("button", {
+    onClick: archiveSelected,
+    disabled: !selected.size,
+    style: {
+      ...btn,
+      background: "#EDEBE3",
+      color: "#57544C",
+      border: "none",
+      opacity: selected.size ? 1 : 0.5,
+      cursor: selected.size ? "pointer" : "default"
+    }
+  }, "Archive"), selectMode && view !== "deleted" && /*#__PURE__*/React.createElement("button", {
+    onClick: deleteSelected,
+    disabled: !selected.size,
+    style: {
+      ...btn,
+      background: "#F4E9E9",
+      color: "#791F1F",
+      border: "none",
+      opacity: selected.size ? 1 : 0.5,
+      cursor: selected.size ? "pointer" : "default"
+    }
+  }, "Delete"), selectMode && (view === "archived" || view === "deleted") && /*#__PURE__*/React.createElement("button", {
+    onClick: restoreSelected,
+    disabled: !selected.size,
+    style: {
+      ...btn,
+      background: "#EAF3DE",
+      color: "#27500A",
+      border: "none",
+      opacity: selected.size ? 1 : 0.5,
+      cursor: selected.size ? "pointer" : "default"
+    }
+  }, "Restore")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 6,
+      flexWrap: "wrap"
+    }
+  }, activeFilters > 0 && /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      setFilters({});
+      setColSearch({});
+      setOpenFilter(null);
+    },
+    style: {
+      ...btn,
+      background: "#F4E9E9",
+      color: "#791F1F",
+      border: "none"
+    }
+  }, "Clear filters"), /*#__PURE__*/React.createElement("button", {
+    onClick: handleRefresh,
+    disabled: refreshing,
+    style: {
+      ...btn,
+      opacity: refreshing ? 0.6 : 1,
+      cursor: refreshing ? "default" : "pointer"
+    }
+  }, refreshing ? "Fetching…" : "Refresh"), /*#__PURE__*/React.createElement("button", {
+    onClick: handleExport,
+    style: btn
+  }, "Export Excel"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setShowSources(s => !s),
+    style: {
+      ...btn,
+      background: showSources ? "var(--bg-accent)" : "var(--surface-1)",
+      color: showSources ? "var(--text-accent)" : "var(--text-primary)"
+    }
+  }, "Manage sources"), user && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      setShowProfile(s => !s);
+      setShowAdmin(false);
+    },
+    style: {
+      ...btn,
+      background: showProfile ? "var(--bg-accent)" : "var(--surface-1)",
+      color: showProfile ? "var(--text-accent)" : "var(--text-primary)"
+    }
+  }, "My profile"), user.isSuperuser && /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      setShowAdmin(s => !s);
+      setShowProfile(false);
+    },
+    style: {
+      ...btn,
+      background: showAdmin ? "var(--bg-accent)" : "var(--surface-1)",
+      color: showAdmin ? "var(--text-accent)" : "var(--text-primary)"
+    }
+  }, "Users"), /*#__PURE__*/React.createElement("button", {
+    onClick: async () => {
+      if (editingUnsaved && !confirm("You are part-way through editing a field. Sign out anyway?")) return;
+      await fetch(`${API_BASE}/api/auth/logout`, {
+        method: "POST",
+        credentials: "include"
+      }).catch(() => {});
+      onSignOut && onSignOut();
+    },
+    style: {
+      ...btn,
+      color: "var(--text-secondary)"
+    }
+  }, "Sign out")), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setShowFeedback(s => !s),
+    style: {
+      ...btn,
+      background: showFeedback ? "var(--bg-accent)" : "#EAF3DE",
+      color: showFeedback ? "var(--text-accent)" : "#27500A",
+      border: showFeedback ? "0.5px solid var(--border-strong)" : "none"
+    }
+  }, "Feedback"))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 12
+    }
+  }, /*#__PURE__*/React.createElement("h2", {
+    style: {
+      fontSize: 18,
+      fontWeight: 500,
+      margin: "0 0 2px",
+      color: "var(--text-primary)"
+    }
+  }, "PhD positions"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: "var(--text-secondary)",
+      margin: 0
+    }
+  }, loaded ? `${processed.length} of ${viewFiltered.length} shown` : "restoring your board…", activeFilters > 0 && ` · ${activeFilters} filter${activeFilters > 1 ? "s" : ""}`, summary.issues > 0 && ` · ${summary.issues} flagged with issues`, lastSync && ` · synced ${lastSync.toLocaleTimeString("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit"
+  })}`, newIds.size > 0 && ` · ${newIds.size} new`)), showIntro && /*#__PURE__*/React.createElement("div", {
+    style: {
+      border: "0.5px solid var(--border-strong)",
+      borderLeft: "3px solid #639922",
+      borderRadius: 8,
+      padding: "10px 12px",
+      marginBottom: 12,
+      background: "var(--surface-1)",
+      display: "flex",
+      justifyContent: "space-between",
+      gap: 12,
+      alignItems: "flex-start"
+    }
+  }, /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: "var(--text-secondary)",
+      margin: 0,
+      lineHeight: 1.5
+    }
+  }, "Open preview. Track funded PhD positions: set a status, tick off documents as you prepare them, flag issues, and keep private notes. Everything you change is saved to your own board and is not visible to anyone else. The positions below are sample data so you can try the workflow. Tell me what is missing via the Feedback button."), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setShowIntro(false),
+    style: {
+      background: "transparent",
+      border: "none",
+      color: "var(--text-muted)",
+      cursor: "pointer",
+      fontSize: 16,
+      lineHeight: 1,
+      padding: 0
+    }
+  }, "×")), !backendUp && loaded && /*#__PURE__*/React.createElement("div", {
+    style: {
+      border: "0.5px solid var(--border-strong)",
+      borderLeft: "3px solid #A32D2D",
+      borderRadius: 8,
+      padding: "9px 12px",
+      marginBottom: 12,
+      background: "var(--surface-1)"
+    }
+  }, /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: "var(--text-secondary)",
+      margin: 0,
+      lineHeight: 1.5
+    }
+  }, "The scoring server could not be reached, so the success column is blank rather than showing zeroes. Sample positions are still listed and everything else on this page works normally.")), showProfile && user && /*#__PURE__*/React.createElement(ProfilePanel, {
+    onClose: () => setShowProfile(false),
+    onProfileChanged: () => handleRefresh()
+  }), showAdmin && user?.isSuperuser && /*#__PURE__*/React.createElement(AdminPanel, {
+    onClose: () => setShowAdmin(false),
+    me: user
+  }), showFeedback && /*#__PURE__*/React.createElement(FeedbackPanel, {
+    onClose: () => setShowFeedback(false)
+  }), showSources && /*#__PURE__*/React.createElement(SourceManager, {
+    sources: sources,
+    editing: editingSource,
+    setEditing: setEditingSource,
+    onSave: saveSource,
+    onDelete: deleteSource,
+    onToggle: toggleSourceEnabled
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "repeat(auto-fit, minmax(104px, 1fr))",
+      gap: 8,
+      marginBottom: 14
+    }
+  }, SUMMARY_CARDS.map(card => {
+    const clickable = card.filterVal !== undefined;
+    const isSel = clickable && (card.filterVal === null ? !filters.status : filters.status && filters.status.size === 1 && filters.status.has(card.filterVal));
+    return /*#__PURE__*/React.createElement("div", {
+      key: card.label,
+      onClick: clickable ? () => setFilters(prev => {
+        const n = {
+          ...prev
+        };
+        if (card.filterVal === null || isSel) delete n.status;else n.status = new Set([card.filterVal]);
+        return n;
+      }) : undefined,
+      style: {
+        background: card.bg,
+        borderRadius: "var(--radius)",
+        padding: "10px 12px",
+        cursor: clickable ? "pointer" : "default",
+        outline: isSel ? "2px solid var(--border-accent)" : "none",
+        outlineOffset: -2
+      }
+    }, /*#__PURE__*/React.createElement("p", {
+      style: {
+        fontSize: 11,
+        color: card.fg,
+        opacity: 0.85,
+        margin: "0 0 4px",
+        fontWeight: 500,
+        whiteSpace: "nowrap",
+        overflow: "hidden",
+        textOverflow: "ellipsis"
+      }
+    }, card.label), /*#__PURE__*/React.createElement("p", {
+      style: {
+        fontSize: 20,
+        fontWeight: 600,
+        color: card.fg,
+        margin: 0
+      }
+    }, card.value), card.sub && /*#__PURE__*/React.createElement("p", {
+      style: {
+        fontSize: 10,
+        color: card.fg,
+        opacity: 0.7,
+        margin: "2px 0 0"
+      }
+    }, card.sub));
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      overflowX: "auto",
+      border: "1px solid var(--border-strong)",
+      borderRadius: 10,
+      background: "var(--surface-2)"
+    }
+  }, /*#__PURE__*/React.createElement("table", {
+    style: {
+      width: "100%",
+      minWidth: TABLE_MIN,
+      borderCollapse: "collapse"
+    }
+  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, COLS.map(col => {
+    const isActive = sortCol === col.key;
+    const hasFilter = !!filters[col.key];
+    const isOpen = openFilter === col.key;
+    return /*#__PURE__*/React.createElement("th", {
+      key: col.key,
+      style: {
+        ...thStyle,
+        width: col.w
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        padding: "7px 6px 5px"
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        justifyContent: col.align === "center" ? "center" : "flex-start",
+        gap: 3,
+        minHeight: 18
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        textTransform: "uppercase"
+      }
+    }, /*#__PURE__*/React.createElement(StackedLabel, {
+      label: col.label
+    })), col.sort && /*#__PURE__*/React.createElement("button", {
+      onClick: () => toggleSort(col.key),
+      title: `Sort by ${col.label}`,
+      style: {
+        background: isActive ? "var(--bg-accent)" : "transparent",
+        border: "none",
+        borderRadius: 4,
+        cursor: "pointer",
+        padding: "1px 3px",
+        display: "inline-flex",
+        color: isActive ? "var(--text-accent)" : "var(--text-muted)",
+        fontSize: 12
+      }
+    }, isActive && sortDir === "desc" ? "\u2193" : "\u2191"), col.filter && /*#__PURE__*/React.createElement("button", {
+      onClick: () => setOpenFilter(isOpen ? null : col.key),
+      title: `Filter ${col.label}`,
+      style: {
+        background: hasFilter ? "var(--bg-accent)" : "transparent",
+        border: "none",
+        borderRadius: 4,
+        cursor: "pointer",
+        padding: "1px 3px",
+        display: "inline-flex",
+        color: hasFilter ? "var(--text-accent)" : "var(--text-muted)",
+        fontSize: 9
+      }
+    }, "▼")), col.search ? /*#__PURE__*/React.createElement("div", {
+      style: {
+        paddingTop: 4
+      }
+    }, /*#__PURE__*/React.createElement("input", {
+      type: "text",
+      placeholder: "search…",
+      value: colSearch[col.key] || "",
+      onChange: e => setColSearch(p => ({
+        ...p,
+        [col.key]: e.target.value
+      })),
+      style: {
+        width: "100%",
+        boxSizing: "border-box",
+        padding: "3px 6px",
+        fontSize: 11,
+        fontWeight: 400,
+        textTransform: "none",
+        border: "0.5px solid var(--border)",
+        borderRadius: 4,
+        background: "var(--surface-2)",
+        color: "var(--text-primary)",
+        outline: "none",
+        height: 22
+      }
+    })) : /*#__PURE__*/React.createElement("div", {
+      style: {
+        height: 26
+      }
+    }), isOpen && col.filter && (() => {
+      const all = Array.from(new Set(viewFiltered.map(r => cellText(r, col.key)))).sort();
+      const sel = filters[col.key] || new Set(all);
+      const q = (filterSearch[col.key] || "").toLowerCase();
+      const shown = q ? all.filter(v => v.toLowerCase().includes(q)) : all;
+      return /*#__PURE__*/React.createElement("div", {
+        style: {
+          position: "absolute",
+          zIndex: 20,
+          marginTop: 2,
+          background: "var(--surface-2)",
+          border: "0.5px solid var(--border-strong)",
+          borderRadius: 8,
+          boxShadow: "var(--shadow-popover)",
+          padding: 8,
+          width: 210,
+          textTransform: "none",
+          fontWeight: 400
+        }
+      }, /*#__PURE__*/React.createElement("input", {
+        autoFocus: true,
+        type: "text",
+        placeholder: "Search values",
+        value: filterSearch[col.key] || "",
+        onChange: e => setFilterSearch(p => ({
+          ...p,
+          [col.key]: e.target.value
+        })),
+        onKeyDown: e => {
+          if (e.key === "Escape") setOpenFilter(null);
+        },
+        style: {
+          width: "100%",
+          boxSizing: "border-box",
+          padding: "5px 7px",
+          fontSize: 12,
+          border: "0.5px solid var(--border-strong)",
+          borderRadius: 4,
+          background: "var(--surface-2)",
+          color: "var(--text-primary)",
+          outline: "none",
+          height: 26,
+          marginBottom: 6
+        }
+      }), /*#__PURE__*/React.createElement("div", {
+        style: {
+          display: "flex",
+          justifyContent: "space-between",
+          marginBottom: 4
+        }
+      }, /*#__PURE__*/React.createElement("button", {
+        onClick: () => clearColumnFilter(col.key),
+        style: {
+          fontSize: 11,
+          color: "var(--text-accent)",
+          background: "transparent",
+          border: "none",
+          cursor: "pointer",
+          padding: 0
+        }
+      }, "Select all"), /*#__PURE__*/React.createElement("button", {
+        onClick: () => setOpenFilter(null),
+        style: {
+          fontSize: 11,
+          color: "var(--text-secondary)",
+          background: "transparent",
+          border: "none",
+          cursor: "pointer",
+          padding: 0
+        }
+      }, "Done")), /*#__PURE__*/React.createElement("div", {
+        style: {
+          maxHeight: 180,
+          overflowY: "auto",
+          display: "flex",
+          flexDirection: "column",
+          gap: 2
+        }
+      }, shown.map(v => /*#__PURE__*/React.createElement("label", {
+        key: v,
+        style: {
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          fontSize: 12,
+          cursor: "pointer",
+          color: "var(--text-primary)"
+        }
+      }, /*#__PURE__*/React.createElement("input", {
+        type: "checkbox",
+        checked: sel.has(v),
+        onChange: () => toggleValueInFilter(col.key, v),
+        style: {
+          margin: 0
+        }
+      }), /*#__PURE__*/React.createElement("span", {
+        style: {
+          flex: 1,
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis"
+        },
+        title: v
+      }, v))), shown.length === 0 && /*#__PURE__*/React.createElement("span", {
+        style: {
+          fontSize: 11,
+          color: "var(--text-muted)"
+        }
+      }, "No matching values")));
+    })()));
+  }))), /*#__PURE__*/React.createElement("tbody", null, visible.map((row, i) => {
+    const sVal = statusMap[row.id] || "none";
+    const vis = rowVisual(sVal, row.hasIssue, row.daysLeft, row.score?.blocked);
+    const td = {
+      ...tdBase,
+      background: vis.bg,
+      color: vis.fg,
+      fontWeight: vis.bold ? 600 : 400
+    };
+    const docs = docList(row.requires);
+    const doneCount = docs.filter(d => docsMap[row.id]?.[d]).length;
+    return /*#__PURE__*/React.createElement("tr", {
+      key: row.id
+    }, /*#__PURE__*/React.createElement("td", {
+      style: {
+        ...td,
+        textAlign: "center",
+        fontSize: 11,
+        opacity: 0.7
+      }
+    }, i + 1), /*#__PURE__*/React.createElement("td", {
+      style: td
+    }, selectMode && /*#__PURE__*/React.createElement("input", {
+      type: "checkbox",
+      checked: selected.has(row.id),
+      onChange: () => toggleSelect(row.id),
+      style: {
+        margin: "0 6px 0 0",
+        verticalAlign: "middle",
+        cursor: "pointer"
+      }
+    }), newIds.has(row.id) && /*#__PURE__*/React.createElement("span", {
+      style: {
+        background: "#DCEBCB",
+        color: "#27500A",
+        fontSize: 9,
+        fontWeight: 600,
+        padding: "1px 5px",
+        borderRadius: 4,
+        marginRight: 5
+      }
+    }, "NEW"), /*#__PURE__*/React.createElement("a", {
+      href: row.url,
+      target: "_blank",
+      rel: "noopener noreferrer",
+      style: {
+        color: vis.muted ? "#8C8880" : "#185FA5",
+        textDecoration: "none",
+        fontWeight: vis.bold ? 600 : 500,
+        lineHeight: 1.4
+      }
+    }, row.topic, /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 10,
+        marginLeft: 3,
+        opacity: 0.6
+      }
+    }, "↗"))), /*#__PURE__*/React.createElement("td", {
+      style: {
+        ...td,
+        textAlign: "center"
+      }
+    }, /*#__PURE__*/React.createElement(FundingIcon, {
+      level: row.funding || "unknown"
+    })), /*#__PURE__*/React.createElement("td", {
+      style: {
+        ...td,
+        fontSize: 11
+      }
+    }, row.source), /*#__PURE__*/React.createElement("td", {
+      style: {
+        ...td,
+        whiteSpace: "nowrap"
+      }
+    }, fmtDate(row.deadline)), /*#__PURE__*/React.createElement("td", {
+      style: td
+    }, row.uni), /*#__PURE__*/React.createElement("td", {
+      style: td
+    }, row.country), /*#__PURE__*/React.createElement("td", {
+      style: {
+        ...td,
+        textAlign: "center",
+        position: "relative"
+      }
+    }, (() => {
+      const sc = row.score;
+      const c = scoreBadge(sc);
+      const open = openScore === row.id;
+      const label = sc.unavailable ? "\u2014" : sc.blocked ? "Not eligible" : `${sc.pct}%`;
+      return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
+        onClick: () => setOpenScore(open ? null : row.id),
+        title: "What this is based on",
+        style: {
+          background: c.bg,
+          color: c.fg,
+          padding: "2px 7px",
+          borderRadius: 6,
+          fontWeight: 600,
+          fontSize: sc.blocked ? 9.5 : 11,
+          whiteSpace: "nowrap",
+          border: "none",
+          cursor: "pointer",
+          lineHeight: 1.3
+        }
+      }, label), !sc.unavailable && !sc.blocked && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: 9,
+          opacity: 0.65,
+          marginTop: 2
+        }
+      }, sc.low, "-", sc.high), /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: 8.5,
+          opacity: 0.55,
+          textTransform: "uppercase",
+          letterSpacing: 0.2
+        }
+      }, sc.confidence, " conf")), open && /*#__PURE__*/React.createElement("div", {
+        style: {
+          position: "absolute",
+          zIndex: 30,
+          right: 0,
+          top: "100%",
+          width: 268,
+          textAlign: "left",
+          background: "var(--surface-2)",
+          border: "0.5px solid var(--border-strong)",
+          borderRadius: 8,
+          boxShadow: "var(--shadow-popover)",
+          padding: 10,
+          fontWeight: 400,
+          color: "var(--text-primary)"
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          display: "flex",
+          justifyContent: "space-between",
+          marginBottom: 6
+        }
+      }, /*#__PURE__*/React.createElement("span", {
+        style: {
+          fontSize: 11,
+          fontWeight: 600
+        }
+      }, "What this is based on"), /*#__PURE__*/React.createElement("button", {
+        onClick: () => setOpenScore(null),
+        style: {
+          background: "transparent",
+          border: "none",
+          cursor: "pointer",
+          color: "var(--text-muted)",
+          fontSize: 13,
+          lineHeight: 1,
+          padding: 0
+        }
+      }, "×")), sc.unavailable && /*#__PURE__*/React.createElement("p", {
+        style: {
+          fontSize: 10,
+          color: "var(--text-secondary)",
+          margin: 0,
+          lineHeight: 1.45
+        }
+      }, "Scores are computed on the server and it could not be reached, so this position has not been assessed. The figure is left blank rather than shown as zero."), sc.blocked && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", {
+        style: {
+          fontSize: 10,
+          fontWeight: 600,
+          color: "#791F1F",
+          margin: "0 0 4px"
+        }
+      }, "Not worth applying"), sc.reasons.map((r, i) => /*#__PURE__*/React.createElement("p", {
+        key: i,
+        style: {
+          fontSize: 10,
+          color: "var(--text-secondary)",
+          margin: "0 0 4px",
+          lineHeight: 1.45
+        }
+      }, r))), !sc.unavailable && !sc.blocked && /*#__PURE__*/React.createElement(React.Fragment, null, sc.areas.length > 0 && /*#__PURE__*/React.createElement("div", {
+        style: {
+          marginBottom: 7
+        }
+      }, /*#__PURE__*/React.createElement("p", {
+        style: {
+          fontSize: 9.5,
+          color: "var(--text-muted)",
+          margin: "0 0 3px",
+          textTransform: "uppercase",
+          letterSpacing: 0.3
+        }
+      }, "Matches your evidence"), sc.areas.slice(0, 3).map((a, i) => /*#__PURE__*/React.createElement("div", {
+        key: i,
+        style: {
+          marginBottom: 4
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          display: "flex",
+          justifyContent: "space-between",
+          gap: 6
+        }
+      }, /*#__PURE__*/React.createElement("span", {
+        style: {
+          fontSize: 10,
+          fontWeight: 500
+        }
+      }, a.label), /*#__PURE__*/React.createElement("span", {
+        style: {
+          fontSize: 9,
+          color: GRADE_COLOR[a.grade],
+          whiteSpace: "nowrap"
+        }
+      }, GRADE_LABEL[a.grade])), /*#__PURE__*/React.createElement("p", {
+        style: {
+          fontSize: 9,
+          color: "var(--text-secondary)",
+          margin: "1px 0 0",
+          lineHeight: 1.35
+        }
+      }, a.evidence)))), sc.penalties.length > 0 && /*#__PURE__*/React.createElement("div", {
+        style: {
+          marginBottom: 7
+        }
+      }, /*#__PURE__*/React.createElement("p", {
+        style: {
+          fontSize: 9.5,
+          color: "var(--text-muted)",
+          margin: "0 0 3px",
+          textTransform: "uppercase",
+          letterSpacing: 0.3
+        }
+      }, "Counts against you"), sc.penalties.map((p, i) => /*#__PURE__*/React.createElement("p", {
+        key: i,
+        style: {
+          fontSize: 9.5,
+          color: "#791F1F",
+          margin: "0 0 3px",
+          lineHeight: 1.4
+        }
+      }, p.reason))), [["Estimated applicants", `~${sc.applicants}${sc.tierKnown ? "" : " (uni not recognised)"}`], ["Profile fit", `${sc.fit}x`], ["Penalties", `${sc.soft}x`], ["Supervisor signal", `${sc.sup}x`]].map(([k, v]) => /*#__PURE__*/React.createElement("div", {
+        key: k,
+        style: {
+          display: "flex",
+          justifyContent: "space-between",
+          gap: 8,
+          fontSize: 10,
+          padding: "2px 0",
+          borderBottom: "0.5px solid var(--border)"
+        }
+      }, /*#__PURE__*/React.createElement("span", {
+        style: {
+          color: "var(--text-secondary)"
+        }
+      }, k), /*#__PURE__*/React.createElement("span", {
+        style: {
+          fontWeight: 500,
+          textAlign: "right"
+        }
+      }, v))), /*#__PURE__*/React.createElement("p", {
+        style: {
+          fontSize: 9.5,
+          color: "var(--text-secondary)",
+          margin: "7px 0 0",
+          lineHeight: 1.4
+        }
+      }, "The supervisor factor reflects what you have recorded about their responsiveness, not a published acceptance rate. No institution publishes those. Log a reply under the email column to narrow the band."))));
+    })()), /*#__PURE__*/React.createElement("td", {
+      style: {
+        ...td,
+        textAlign: "center",
+        fontWeight: row.daysLeft <= 7 ? 700 : 500
+      }
+    }, row.daysLeft), /*#__PURE__*/React.createElement("td", {
+      style: {
+        ...td,
+        textAlign: "center",
+        fontSize: 11
+      }
+    }, row.calendarEntry), /*#__PURE__*/React.createElement("td", {
+      style: {
+        ...td,
+        fontSize: 11
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        justifyContent: "space-between",
+        marginBottom: 3,
+        opacity: 0.75
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 10
+      }
+    }, "docs"), /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 10,
+        fontWeight: 600,
+        color: doneCount === docs.length ? "#27500A" : "inherit"
+      }
+    }, doneCount, "/", docs.length)), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        flexDirection: "column",
+        gap: 1
+      }
+    }, docs.map(d => {
+      const on = !!docsMap[row.id]?.[d];
+      return /*#__PURE__*/React.createElement("label", {
+        key: d,
+        style: {
+          display: "flex",
+          alignItems: "center",
+          gap: 4,
+          cursor: "pointer",
+          fontSize: 10.5,
+          lineHeight: 1.35
+        }
+      }, /*#__PURE__*/React.createElement("input", {
+        type: "checkbox",
+        checked: on,
+        onChange: () => toggleDoc(row.id, d),
+        style: {
+          margin: 0,
+          width: 11,
+          height: 11,
+          cursor: "pointer",
+          flexShrink: 0
+        }
+      }), /*#__PURE__*/React.createElement("span", {
+        style: {
+          textDecoration: on ? "line-through" : "none",
+          opacity: on ? 0.6 : 1
+        }
+      }, d));
+    }))), /*#__PURE__*/React.createElement("td", {
+      style: {
+        ...td,
+        fontSize: 11
+      }
+    }, /*#__PURE__*/React.createElement("input", {
+      type: "text",
+      value: row.profEmail,
+      placeholder: "add email(s), comma separated",
+      onChange: e => {
+        setEmail(row.id, e.target.value);
+        setEditingUnsaved(true);
+      },
+      style: {
+        width: "100%",
+        boxSizing: "border-box",
+        padding: "3px 5px",
+        fontSize: 11,
+        border: "0.5px solid transparent",
+        borderRadius: 4,
+        background: "transparent",
+        color: row.profEmail ? "#185FA5" : "var(--text-muted)",
+        outline: "none"
+      },
+      onFocus: e => {
+        e.target.style.border = "0.5px solid var(--border-strong)";
+        e.target.style.background = "var(--surface-2)";
+      },
+      onBlur: e => {
+        e.target.style.border = "0.5px solid transparent";
+        e.target.style.background = "transparent";
+        // Leaving the field commits it. No button needed.
+        saveField(row.id, ["phd_emails"]);
+        setEditingUnsaved(false);
+      }
+    }), row.profEmail && /*#__PURE__*/React.createElement("a", {
+      href: `mailto:${row.profEmail.split(",").map(s => s.trim()).filter(Boolean).join(",")}`,
+      style: {
+        fontSize: 10,
+        color: "#185FA5",
+        textDecoration: "none"
+      }
+    }, "✉ compose"), /*#__PURE__*/React.createElement("select", {
+      value: (supMap[row.id] || {}).reply || "none_yet",
+      onChange: e => setSupervisor(row.id, {
+        reply: e.target.value
+      }),
+      title: "Recording the supervisor's response sharpens the estimate",
+      style: {
+        width: "100%",
+        boxSizing: "border-box",
+        marginTop: 3,
+        padding: "2px 4px",
+        fontSize: 9.5,
+        borderRadius: 4,
+        border: "0.5px solid var(--border)",
+        background: "var(--surface-2)",
+        color: "var(--text-secondary)",
+        outline: "none",
+        fontFamily: "inherit"
+      }
+    }, Object.entries(scoringCfg.replyLabels || {}).map(([v, l]) => /*#__PURE__*/React.createElement("option", {
+      key: v,
+      value: v
+    }, l))), /*#__PURE__*/React.createElement("select", {
+      value: (supMap[row.id] || {}).intake || "unknown",
+      onChange: e => setSupervisor(row.id, {
+        intake: e.target.value
+      }),
+      title: "Whether the group has taken on PhD students recently",
+      style: {
+        width: "100%",
+        boxSizing: "border-box",
+        marginTop: 2,
+        padding: "2px 4px",
+        fontSize: 9.5,
+        borderRadius: 4,
+        border: "0.5px solid var(--border)",
+        background: "var(--surface-2)",
+        color: "var(--text-secondary)",
+        outline: "none",
+        fontFamily: "inherit"
+      }
+    }, Object.entries(scoringCfg.intakeLabels || {}).map(([v, l]) => /*#__PURE__*/React.createElement("option", {
+      key: v,
+      value: v
+    }, l)))), /*#__PURE__*/React.createElement("td", {
+      style: {
+        ...td,
+        fontSize: 11
+      }
+    }, row.remarks), /*#__PURE__*/React.createElement("td", {
+      style: {
+        ...td,
+        fontSize: 11
+      }
+    }, /*#__PURE__*/React.createElement("textarea", {
+      value: row.notes,
+      placeholder: "e.g. EU students only",
+      onChange: e => {
+        setNote(row.id, e.target.value);
+        setEditingUnsaved(true);
+      },
+      rows: 2,
+      style: {
+        width: "100%",
+        boxSizing: "border-box",
+        padding: "3px 5px",
+        fontSize: 11,
+        border: "0.5px solid transparent",
+        borderRadius: 4,
+        background: "transparent",
+        color: "inherit",
+        outline: "none",
+        resize: "vertical",
+        fontFamily: "inherit",
+        lineHeight: 1.35
+      },
+      onFocus: e => {
+        e.target.style.border = "0.5px solid var(--border-strong)";
+        e.target.style.background = "var(--surface-2)";
+      },
+      onBlur: e => {
+        e.target.style.border = "0.5px solid transparent";
+        e.target.style.background = "transparent";
+        saveField(row.id, ["phd_notes"]);
+        setEditingUnsaved(false);
+      }
+    })), /*#__PURE__*/React.createElement("td", {
+      style: {
+        ...td,
+        textAlign: "center"
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "grid",
+        gridTemplateColumns: "1fr 1fr",
+        gap: 2,
+        width: 138,
+        margin: "0 auto",
+        background: "var(--border)",
+        border: "0.5px solid var(--border-strong)",
+        borderRadius: 6,
+        overflow: "hidden"
+      }
+    }, ["none", "rejected", "applied", "offer"].map(v => {
+      const opt = STATUS_OPTS.find(o => o.val === v);
+      const on = sVal === v;
+      return /*#__PURE__*/React.createElement("button", {
+        key: v,
+        role: "radio",
+        "aria-checked": on,
+        title: opt.label,
+        onClick: () => setStatus(row.id, v),
+        style: {
+          fontSize: 10,
+          padding: "3px 2px",
+          cursor: "pointer",
+          border: "none",
+          background: on ? opt.bg : "var(--surface-2)",
+          color: on ? opt.fg : "var(--text-muted)",
+          fontWeight: on ? 600 : 400,
+          whiteSpace: "nowrap",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 3
+        }
+      }, /*#__PURE__*/React.createElement("span", {
+        style: {
+          width: 5,
+          height: 5,
+          borderRadius: "50%",
+          background: on ? opt.dot : "var(--border-strong)",
+          flexShrink: 0
+        }
+      }), opt.label);
+    }), /*#__PURE__*/React.createElement("button", {
+      title: "Flag an application issue (greys out the row)",
+      onClick: () => toggleIssue(row.id),
+      style: {
+        fontSize: 10,
+        padding: "3px 2px",
+        cursor: "pointer",
+        border: "none",
+        background: row.hasIssue ? "#E7E4DC" : "var(--surface-2)",
+        color: row.hasIssue ? "#57544C" : "var(--text-muted)",
+        fontWeight: row.hasIssue ? 600 : 400
+      }
+    }, row.hasIssue ? "Issue ✓" : "Issue"), /*#__PURE__*/React.createElement("button", {
+      title: "Archive this position",
+      onClick: () => toggleArchive(row.id),
+      style: {
+        fontSize: 10,
+        padding: "3px 2px",
+        cursor: "pointer",
+        border: "none",
+        background: row.isArchived ? "#EDEBE3" : "var(--surface-2)",
+        color: row.isArchived ? "#57544C" : "var(--text-muted)",
+        fontWeight: row.isArchived ? 600 : 400
+      }
+    }, row.isArchived ? "Archived" : "Archive"))));
+  }))), visible.length < processed.length && /*#__PURE__*/React.createElement("div", {
+    ref: sentinelRef,
+    style: {
+      padding: 16,
+      textAlign: "center",
+      color: "var(--text-muted)",
+      fontSize: 12
+    }
+  }, "Loading more positions…"), processed.length === 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: 32,
+      textAlign: "center",
+      color: "var(--text-muted)",
+      fontSize: 13
+    }
+  }, "Nothing to show here. Try clearing filters or switching view.")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      marginTop: 8,
+      fontSize: 11,
+      color: "var(--text-muted)",
+      gap: 12,
+      flexWrap: "wrap"
+    }
+  }, /*#__PURE__*/React.createElement("span", null, "Showing ", visible.length, " of ", processed.length, ". Bold red = under 7 days. Green = offer. Grey = rejected or flagged issue."), /*#__PURE__*/React.createElement("span", null, "Sorted by ", COLS.find(c => c.key === sortCol)?.label, " (", sortDir === "asc" ? "asc" : "desc", ")")));
+}
+
+/* =========================================================== source manager */
+function SourceManager({
+  sources,
+  editing,
+  setEditing,
+  onSave,
+  onDelete,
+  onToggle
+}) {
+  const blank = {
+    id: "",
+    name: "",
+    url: "",
+    adapter: ADAPTERS[0],
+    enabled: true,
+    note: ""
+  };
+  const [draft, setDraft] = useState(blank);
+  useEffect(() => {
+    if (editing) setDraft(editing);
+  }, [editing]);
+  const startNew = () => {
+    const d = {
+      ...blank,
+      id: "s" + Date.now().toString(36)
+    };
+    setDraft(d);
+    setEditing(d);
+  };
+  const commit = () => {
+    if (!draft.name.trim() || !draft.url.trim()) return;
+    onSave(draft);
+    setDraft(blank);
+  };
+  const cell = {
+    padding: "6px 8px",
+    fontSize: 12,
+    borderBottom: "0.5px solid var(--border)",
+    verticalAlign: "middle"
+  };
+  const inp = {
+    width: "100%",
+    boxSizing: "border-box",
+    padding: "4px 6px",
+    fontSize: 12,
+    border: "0.5px solid var(--border-strong)",
+    borderRadius: 4,
+    background: "var(--surface-2)",
+    color: "var(--text-primary)",
+    outline: "none"
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      border: "1px solid var(--border-strong)",
+      borderRadius: 10,
+      padding: 12,
+      marginBottom: 14,
+      background: "var(--surface-1)"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h3", {
+    style: {
+      fontSize: 14,
+      fontWeight: 600,
+      margin: "0 0 2px",
+      color: "var(--text-primary)"
+    }
+  }, "Scraping sources"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 11,
+      color: "var(--text-secondary)",
+      margin: 0
+    }
+  }, sources.filter(s => s.enabled).length, " of ", sources.length, " enabled. Disabled sources are skipped on refresh.")), /*#__PURE__*/React.createElement("button", {
+    onClick: startNew,
+    style: {
+      background: "var(--bg-accent)",
+      color: "var(--text-accent)",
+      border: "none",
+      borderRadius: "var(--radius)",
+      padding: "5px 10px",
+      fontSize: 12,
+      cursor: "pointer"
+    }
+  }, "Add source")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      overflowX: "auto",
+      border: "0.5px solid var(--border)",
+      borderRadius: 8,
+      background: "var(--surface-2)"
+    }
+  }, /*#__PURE__*/React.createElement("table", {
+    style: {
+      width: "100%",
+      minWidth: 760,
+      borderCollapse: "collapse"
+    }
+  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", {
+    style: {
+      background: "var(--surface-1)"
+    }
+  }, ["On", "Name", "Base URL", "Adapter", "Note", ""].map(h => /*#__PURE__*/React.createElement("th", {
+    key: h,
+    style: {
+      ...cell,
+      textAlign: "left",
+      fontSize: 10.5,
+      textTransform: "uppercase",
+      color: "var(--text-secondary)",
+      fontWeight: 500,
+      borderBottom: "1px solid var(--border-strong)"
+    }
+  }, h)))), /*#__PURE__*/React.createElement("tbody", null, sources.map(s => {
+    const isEditing = editing?.id === s.id;
+    if (isEditing) {
+      return /*#__PURE__*/React.createElement("tr", {
+        key: s.id
+      }, /*#__PURE__*/React.createElement("td", {
+        style: cell
+      }, /*#__PURE__*/React.createElement("input", {
+        type: "checkbox",
+        checked: draft.enabled,
+        onChange: e => setDraft({
+          ...draft,
+          enabled: e.target.checked
+        })
+      })), /*#__PURE__*/React.createElement("td", {
+        style: cell
+      }, /*#__PURE__*/React.createElement("input", {
+        style: inp,
+        value: draft.name,
+        onChange: e => setDraft({
+          ...draft,
+          name: e.target.value
+        })
+      })), /*#__PURE__*/React.createElement("td", {
+        style: cell
+      }, /*#__PURE__*/React.createElement("input", {
+        style: inp,
+        value: draft.url,
+        onChange: e => setDraft({
+          ...draft,
+          url: e.target.value
+        })
+      })), /*#__PURE__*/React.createElement("td", {
+        style: cell
+      }, /*#__PURE__*/React.createElement("select", {
+        style: inp,
+        value: draft.adapter,
+        onChange: e => setDraft({
+          ...draft,
+          adapter: e.target.value
+        })
+      }, ADAPTERS.map(a => /*#__PURE__*/React.createElement("option", {
+        key: a,
+        value: a
+      }, a)))), /*#__PURE__*/React.createElement("td", {
+        style: cell
+      }, /*#__PURE__*/React.createElement("input", {
+        style: inp,
+        value: draft.note,
+        onChange: e => setDraft({
+          ...draft,
+          note: e.target.value
+        })
+      })), /*#__PURE__*/React.createElement("td", {
+        style: {
+          ...cell,
+          whiteSpace: "nowrap"
+        }
+      }, /*#__PURE__*/React.createElement("button", {
+        onClick: commit,
+        style: {
+          background: "#EAF3DE",
+          color: "#27500A",
+          border: "none",
+          borderRadius: 4,
+          padding: "3px 8px",
+          fontSize: 11,
+          cursor: "pointer",
+          marginRight: 4
+        }
+      }, "Save"), /*#__PURE__*/React.createElement("button", {
+        onClick: () => setEditing(null),
+        style: {
+          background: "transparent",
+          color: "var(--text-secondary)",
+          border: "none",
+          fontSize: 11,
+          cursor: "pointer"
+        }
+      }, "Cancel")));
+    }
+    return /*#__PURE__*/React.createElement("tr", {
+      key: s.id,
+      style: {
+        opacity: s.enabled ? 1 : 0.55
+      }
+    }, /*#__PURE__*/React.createElement("td", {
+      style: cell
+    }, /*#__PURE__*/React.createElement("input", {
+      type: "checkbox",
+      checked: s.enabled,
+      onChange: () => onToggle(s.id),
+      style: {
+        cursor: "pointer"
+      }
+    })), /*#__PURE__*/React.createElement("td", {
+      style: {
+        ...cell,
+        fontWeight: 500,
+        color: "var(--text-primary)"
+      }
+    }, s.name), /*#__PURE__*/React.createElement("td", {
+      style: {
+        ...cell,
+        color: "var(--text-secondary)",
+        fontSize: 11
+      }
+    }, s.url), /*#__PURE__*/React.createElement("td", {
+      style: {
+        ...cell,
+        fontSize: 11
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        background: "var(--surface-1)",
+        border: "0.5px solid var(--border)",
+        borderRadius: 4,
+        padding: "1px 6px"
+      }
+    }, s.adapter)), /*#__PURE__*/React.createElement("td", {
+      style: {
+        ...cell,
+        color: "var(--text-secondary)",
+        fontSize: 11
+      }
+    }, s.note || "—"), /*#__PURE__*/React.createElement("td", {
+      style: {
+        ...cell,
+        whiteSpace: "nowrap"
+      }
+    }, /*#__PURE__*/React.createElement("button", {
+      onClick: () => setEditing(s),
+      style: {
+        background: "transparent",
+        color: "#185FA5",
+        border: "none",
+        fontSize: 11,
+        cursor: "pointer",
+        marginRight: 6
+      }
+    }, "Edit"), /*#__PURE__*/React.createElement("button", {
+      onClick: () => onDelete(s.id),
+      style: {
+        background: "transparent",
+        color: "#791F1F",
+        border: "none",
+        fontSize: 11,
+        cursor: "pointer"
+      }
+    }, "Remove")));
+  }), editing && !sources.some(s => s.id === editing.id) && /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
+    style: cell
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: draft.enabled,
+    onChange: e => setDraft({
+      ...draft,
+      enabled: e.target.checked
+    })
+  })), /*#__PURE__*/React.createElement("td", {
+    style: cell
+  }, /*#__PURE__*/React.createElement("input", {
+    style: inp,
+    autoFocus: true,
+    placeholder: "Source name",
+    value: draft.name,
+    onChange: e => setDraft({
+      ...draft,
+      name: e.target.value
+    })
+  })), /*#__PURE__*/React.createElement("td", {
+    style: cell
+  }, /*#__PURE__*/React.createElement("input", {
+    style: inp,
+    placeholder: "https://…",
+    value: draft.url,
+    onChange: e => setDraft({
+      ...draft,
+      url: e.target.value
+    })
+  })), /*#__PURE__*/React.createElement("td", {
+    style: cell
+  }, /*#__PURE__*/React.createElement("select", {
+    style: inp,
+    value: draft.adapter,
+    onChange: e => setDraft({
+      ...draft,
+      adapter: e.target.value
+    })
+  }, ADAPTERS.map(a => /*#__PURE__*/React.createElement("option", {
+    key: a,
+    value: a
+  }, a)))), /*#__PURE__*/React.createElement("td", {
+    style: cell
+  }, /*#__PURE__*/React.createElement("input", {
+    style: inp,
+    placeholder: "optional",
+    value: draft.note,
+    onChange: e => setDraft({
+      ...draft,
+      note: e.target.value
+    })
+  })), /*#__PURE__*/React.createElement("td", {
+    style: {
+      ...cell,
+      whiteSpace: "nowrap"
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: commit,
+    style: {
+      background: "#EAF3DE",
+      color: "#27500A",
+      border: "none",
+      borderRadius: 4,
+      padding: "3px 8px",
+      fontSize: 11,
+      cursor: "pointer",
+      marginRight: 4
+    }
+  }, "Add"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setEditing(null),
+    style: {
+      background: "transparent",
+      color: "var(--text-secondary)",
+      border: "none",
+      fontSize: 11,
+      cursor: "pointer"
+    }
+  }, "Cancel")))))));
+}
+
+/* ============================================================== feedback */
+function FeedbackPanel({
+  onClose
+}) {
+  const [name, setName] = useState("");
+  const [role, setRole] = useState("PhD applicant");
+  const [rating, setRating] = useState(0);
+  const [message, setMessage] = useState("");
+  const [entries, setEntries] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(false);
+  const [error, setError] = useState("");
+  const load = async () => {
+    setLoading(true);
+    try {
+      const list = await window.storage?.list("fb:", true);
+      const keys = list?.keys || [];
+      const rows = [];
+      for (const k of keys.slice(-60)) {
+        try {
+          const r = await window.storage?.get(k, true);
+          if (r?.value) rows.push(JSON.parse(r.value));
+        } catch (e) {/* skip unreadable entry */}
+      }
+      rows.sort((a, b) => (b.at || 0) - (a.at || 0));
+      setEntries(rows);
+    } catch (e) {
+      setEntries([]);
+    }
+    setLoading(false);
+  };
+  useEffect(() => {
+    load();
+  }, []);
+  const submit = async () => {
+    if (!message.trim()) {
+      setError("Please write a message first.");
+      return;
+    }
+    setSending(true);
+    setError("");
+    const entry = {
+      id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+      name: name.trim() || "Anonymous",
+      role,
+      rating,
+      message: message.trim().slice(0, 2000),
+      at: Date.now()
+    };
+    try {
+      await window.storage?.set(`fb:${entry.id}`, JSON.stringify(entry), true);
+      setSent(true);
+      setMessage("");
+      setRating(0);
+      await load();
+    } catch (e) {
+      setError("Could not send just now. Please try again.");
+    }
+    setSending(false);
+  };
+  const inp = {
+    width: "100%",
+    boxSizing: "border-box",
+    padding: "5px 7px",
+    fontSize: 12,
+    border: "0.5px solid var(--border-strong)",
+    borderRadius: 4,
+    background: "var(--surface-2)",
+    color: "var(--text-primary)",
+    outline: "none",
+    fontFamily: "inherit"
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      border: "1px solid var(--border-strong)",
+      borderRadius: 10,
+      padding: 12,
+      marginBottom: 14,
+      background: "var(--surface-1)"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "flex-start",
+      marginBottom: 10,
+      gap: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h3", {
+    style: {
+      fontSize: 14,
+      fontWeight: 600,
+      margin: "0 0 2px",
+      color: "var(--text-primary)"
+    }
+  }, "Feedback"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 11,
+      color: "var(--text-secondary)",
+      margin: 0
+    }
+  }, "What would make this genuinely useful for your applications? Posts here are public to everyone using this preview, so please leave out anything private.")), /*#__PURE__*/React.createElement("button", {
+    onClick: onClose,
+    style: {
+      background: "transparent",
+      border: "none",
+      color: "var(--text-muted)",
+      cursor: "pointer",
+      fontSize: 16,
+      lineHeight: 1,
+      padding: 0
+    }
+  }, "×")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "1fr 1fr auto",
+      gap: 8,
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    style: inp,
+    placeholder: "Name (optional)",
+    value: name,
+    onChange: e => setName(e.target.value)
+  }), /*#__PURE__*/React.createElement("select", {
+    style: inp,
+    value: role,
+    onChange: e => setRole(e.target.value)
+  }, ["PhD applicant", "Masters applicant", "Current student", "Supervisor", "Consultant", "Just browsing"].map(r => /*#__PURE__*/React.createElement("option", {
+    key: r,
+    value: r
+  }, r))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 2
+    }
+  }, [1, 2, 3, 4, 5].map(n => /*#__PURE__*/React.createElement("button", {
+    key: n,
+    onClick: () => setRating(n),
+    title: `${n} out of 5`,
+    style: {
+      background: "transparent",
+      border: "none",
+      cursor: "pointer",
+      padding: "0 1px",
+      fontSize: 16,
+      lineHeight: 1,
+      color: n <= rating ? "#639922" : "var(--border-strong)"
+    }
+  }, "★")))), /*#__PURE__*/React.createElement("textarea", {
+    style: {
+      ...inp,
+      minHeight: 62,
+      resize: "vertical",
+      marginBottom: 8
+    },
+    placeholder: "What worked, what was confusing, what is missing? Which sources should be added?",
+    value: message,
+    onChange: e => {
+      setMessage(e.target.value);
+      setSent(false);
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 10,
+      marginBottom: 12
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: submit,
+    disabled: sending,
+    style: {
+      background: "#EAF3DE",
+      color: "#27500A",
+      border: "none",
+      borderRadius: "var(--radius)",
+      padding: "6px 14px",
+      fontSize: 12,
+      fontWeight: 500,
+      cursor: sending ? "default" : "pointer",
+      opacity: sending ? 0.6 : 1
+    }
+  }, sending ? "Sending…" : "Send feedback"), sent && /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: "#27500A"
+    }
+  }, "Thanks, that is recorded."), error && /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: "#791F1F"
+    }
+  }, error)), /*#__PURE__*/React.createElement("div", {
+    style: {
+      borderTop: "0.5px solid var(--border)",
+      paddingTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 11,
+      color: "var(--text-secondary)",
+      margin: "0 0 8px",
+      fontWeight: 500
+    }
+  }, loading ? "Loading responses…" : `${entries.length} response${entries.length === 1 ? "" : "s"}`), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      gap: 8,
+      maxHeight: 260,
+      overflowY: "auto"
+    }
+  }, entries.map(e => /*#__PURE__*/React.createElement("div", {
+    key: e.id,
+    style: {
+      border: "0.5px solid var(--border)",
+      borderRadius: 6,
+      padding: "7px 9px",
+      background: "var(--surface-2)"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      alignItems: "baseline",
+      marginBottom: 3,
+      flexWrap: "wrap"
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 12,
+      fontWeight: 600,
+      color: "var(--text-primary)"
+    }
+  }, e.name), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 10,
+      color: "var(--text-secondary)",
+      background: "var(--surface-1)",
+      border: "0.5px solid var(--border)",
+      borderRadius: 4,
+      padding: "0 5px"
+    }
+  }, e.role), e.rating > 0 && /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 10,
+      color: "#639922"
+    }
+  }, "\u2605".repeat(e.rating)), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 10,
+      color: "var(--text-muted)",
+      marginLeft: "auto"
+    }
+  }, new Date(e.at).toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "short"
+  }))), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 11.5,
+      color: "var(--text-primary)",
+      margin: 0,
+      lineHeight: 1.45,
+      whiteSpace: "pre-wrap"
+    }
+  }, e.message))), !loading && entries.length === 0 && /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 11,
+      color: "var(--text-muted)",
+      margin: 0
+    }
+  }, "No responses yet. Yours would be the first."))));
+}
+
+/* ==================================================================== auth */
+/* Rendered only when REQUIRE_AUTH is set at build time. The public demo never
+   mounts any of this, so an anonymous visitor cannot reach a login form that
+   would do nothing useful. */
+
+const inputStyle = {
+  width: "100%",
+  boxSizing: "border-box",
+  padding: "7px 9px",
+  fontSize: 13,
+  border: "0.5px solid var(--border-strong)",
+  borderRadius: 5,
+  background: "var(--surface-2)",
+  color: "var(--text-primary)",
+  outline: "none",
+  fontFamily: "inherit"
+};
+function AuthGate({
+  onAuthed
+}) {
+  const [mode, setMode] = useState("login");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [name, setName] = useState("");
+  const [captcha, setCaptcha] = useState(null);
+  const [captchaAnswer, setCaptchaAnswer] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const loadCaptcha = useCallback(async () => {
+    try {
+      const r = await fetch(`${API_BASE}/api/auth/captcha`, {
+        credentials: "include"
+      });
+      if (r.ok) {
+        setCaptcha(await r.json());
+        setCaptchaAnswer("");
+      }
+    } catch (e) {
+      setCaptcha(null);
+    }
+  }, []);
+  useEffect(() => {
+    if (mode === "register") loadCaptcha();
+  }, [mode, loadCaptcha]);
+  const submit = async () => {
+    if (!email.trim() || !password) {
+      setErr("Email and password are required.");
+      return;
+    }
+    setBusy(true);
+    setErr("");
+    const body = {
+      email: email.trim(),
+      password
+    };
+    if (mode === "register") {
+      body.name = name.trim();
+      if (captcha) {
+        body.captchaToken = captcha.token;
+        body.captchaAnswer = captchaAnswer;
+      }
+    }
+    try {
+      const r = await fetch(`${API_BASE}/api/auth/${mode}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        credentials: "include",
+        body: JSON.stringify(body)
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setErr(data.error || "That did not work.");
+        // A used or expired challenge cannot be reused, so fetch a fresh one
+        // rather than leaving the user retrying an answer that can never pass.
+        if (mode === "register") loadCaptcha();
+        setBusy(false);
+        return;
+      }
+      onAuthed(data);
+    } catch (e) {
+      setErr("Could not reach the server.");
+    }
+    setBusy(false);
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      maxWidth: 380,
+      margin: "8vh auto",
+      padding: "0 16px"
+    }
+  }, /*#__PURE__*/React.createElement("h1", {
+    style: {
+      fontSize: 20,
+      fontWeight: 600,
+      margin: "0 0 4px",
+      color: "var(--text-primary)"
+    }
+  }, "PhD position tracker"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12.5,
+      color: "var(--text-secondary)",
+      margin: "0 0 18px",
+      lineHeight: 1.5
+    }
+  }, mode === "login" ? "Sign in to see your own board, scored against your uploaded CV." : "Create an account. Your positions, notes and documents stay private to you."), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 0,
+      marginBottom: 14,
+      border: "0.5px solid var(--border-strong)",
+      borderRadius: 6,
+      overflow: "hidden"
+    }
+  }, ["login", "register"].map(m => /*#__PURE__*/React.createElement("button", {
+    key: m,
+    onClick: () => {
+      setMode(m);
+      setErr("");
+    },
+    style: {
+      flex: 1,
+      padding: "6px 0",
+      fontSize: 12,
+      border: "none",
+      cursor: "pointer",
+      background: mode === m ? "var(--bg-accent)" : "var(--surface-2)",
+      color: mode === m ? "var(--text-accent)" : "var(--text-secondary)",
+      fontWeight: mode === m ? 600 : 400
+    }
+  }, m === "login" ? "Sign in" : "Register"))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      gap: 9
+    }
+  }, mode === "register" && /*#__PURE__*/React.createElement("input", {
+    style: inputStyle,
+    placeholder: "Name (optional)",
+    value: name,
+    onChange: e => setName(e.target.value)
+  }), /*#__PURE__*/React.createElement("input", {
+    style: inputStyle,
+    type: "email",
+    placeholder: "Email",
+    value: email,
+    autoComplete: "username",
+    onChange: e => setEmail(e.target.value)
+  }), /*#__PURE__*/React.createElement("input", {
+    style: inputStyle,
+    type: "password",
+    placeholder: mode === "register" ? "Password (8 characters or more)" : "Password",
+    value: password,
+    autoComplete: mode === "register" ? "new-password" : "current-password",
+    onChange: e => setPassword(e.target.value),
+    onKeyDown: e => {
+      if (e.key === "Enter") submit();
+    }
+  }), mode === "register" && captcha && /*#__PURE__*/React.createElement("div", {
+    style: {
+      border: "0.5px solid var(--border)",
+      borderRadius: 6,
+      padding: "8px 10px",
+      background: "var(--surface-1)"
+    }
+  }, /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 11.5,
+      color: "var(--text-secondary)",
+      margin: "0 0 5px"
+    }
+  }, captcha.question), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    style: {
+      ...inputStyle,
+      padding: "5px 8px",
+      fontSize: 12.5
+    },
+    inputMode: "numeric",
+    placeholder: "Answer",
+    value: captchaAnswer,
+    onChange: e => setCaptchaAnswer(e.target.value),
+    onKeyDown: e => {
+      if (e.key === "Enter") submit();
+    }
+  }), /*#__PURE__*/React.createElement("button", {
+    onClick: loadCaptcha,
+    title: "Show a different question",
+    style: {
+      background: "var(--surface-2)",
+      border: "0.5px solid var(--border-strong)",
+      borderRadius: 5,
+      cursor: "pointer",
+      fontSize: 11,
+      padding: "0 9px",
+      color: "var(--text-secondary)"
+    }
+  }, "New"))), err && /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 11.5,
+      color: "#A32D2D",
+      margin: 0,
+      lineHeight: 1.4
+    }
+  }, err), /*#__PURE__*/React.createElement("button", {
+    onClick: submit,
+    disabled: busy,
+    style: {
+      background: "#EAF3DE",
+      color: "#27500A",
+      border: "none",
+      borderRadius: 6,
+      padding: "9px 0",
+      fontSize: 13,
+      fontWeight: 600,
+      cursor: busy ? "default" : "pointer",
+      opacity: busy ? 0.6 : 1,
+      marginTop: 2
+    }
+  }, busy ? "Working\u2026" : mode === "login" ? "Sign in" : "Create account")));
+}
+
+/* ================================================================ profile */
+const GRADE_ORDER = ["strong", "moderate_strong", "moderate", "aspirational"];
+function ProfilePanel({
+  onClose,
+  onProfileChanged
+}) {
+  const [profile, setProfile] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [msg, setMsg] = useState("");
+  const [tagInput, setTagInput] = useState("");
+  const fileRef = useRef(null);
+  const load = useCallback(async () => {
+    try {
+      const r = await fetch(`${API_BASE}/api/profile`, {
+        credentials: "include"
+      });
+      if (r.ok) setProfile(await r.json());
+    } catch (e) {
+      setErr("Could not load your profile.");
+    }
+  }, []);
+  useEffect(() => {
+    load();
+  }, [load]);
+  const upload = async file => {
+    if (!file) return;
+    setBusy(true);
+    setErr("");
+    setMsg("");
+    const fd = new FormData();
+    fd.append("file", file);
+    try {
+      const r = await fetch(`${API_BASE}/api/profile/cv`, {
+        method: "POST",
+        credentials: "include",
+        body: fd
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setErr(data.error || "Upload failed.");
+        setBusy(false);
+        return;
+      }
+      setMsg("Profile rebuilt from your document. Scores now reflect it.");
+      await load();
+      onProfileChanged && onProfileChanged();
+    } catch (e) {
+      setErr("Could not reach the server.");
+    }
+    setBusy(false);
+  };
+  const saveTags = async tags => {
+    setBusy(true);
+    setErr("");
+    try {
+      const r = await fetch(`${API_BASE}/api/profile/interests`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        credentials: "include",
+        body: JSON.stringify({
+          interests: tags
+        })
+      });
+      if (r.ok) {
+        await load();
+        onProfileChanged && onProfileChanged();
+      }
+    } catch (e) {
+      setErr("Could not save interests.");
+    }
+    setBusy(false);
+  };
+  const addTag = () => {
+    const t = tagInput.trim().toLowerCase();
+    if (!t) return;
+    const current = profile?.interests || [];
+    if (current.includes(t)) {
+      setTagInput("");
+      return;
+    }
+    saveTags([...current, t]);
+    setTagInput("");
+  };
+  const setGrade = async (areaId, grade) => {
+    try {
+      await fetch(`${API_BASE}/api/profile/area/${areaId}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        credentials: "include",
+        body: JSON.stringify({
+          grade
+        })
+      });
+      await load();
+      onProfileChanged && onProfileChanged();
+    } catch (e) {
+      setErr("Could not change that grade.");
+    }
+  };
+  const s = profile?.summary;
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      border: "1px solid var(--border-strong)",
+      borderRadius: 10,
+      padding: 14,
+      marginBottom: 14,
+      background: "var(--surface-1)"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "flex-start",
+      gap: 12,
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h3", {
+    style: {
+      fontSize: 14,
+      fontWeight: 600,
+      margin: "0 0 2px"
+    }
+  }, "Your scoring profile"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 11.5,
+      color: "var(--text-secondary)",
+      margin: 0,
+      lineHeight: 1.45
+    }
+  }, "Every success chance is calculated against this. Upload your CV or portfolio and check the reading below, because a wrong grade here skews every position on your board.")), /*#__PURE__*/React.createElement("button", {
+    onClick: onClose,
+    style: {
+      background: "transparent",
+      border: "none",
+      cursor: "pointer",
+      color: "var(--text-muted)",
+      fontSize: 17,
+      lineHeight: 1,
+      padding: 0
+    }
+  }, "×")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      alignItems: "center",
+      flexWrap: "wrap",
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    ref: fileRef,
+    type: "file",
+    accept: ".docx,.pdf,.txt,.md",
+    onChange: e => upload(e.target.files?.[0]),
+    style: {
+      display: "none"
+    }
+  }), /*#__PURE__*/React.createElement("button", {
+    onClick: () => fileRef.current?.click(),
+    disabled: busy,
+    style: {
+      background: "#EAF3DE",
+      color: "#27500A",
+      border: "none",
+      borderRadius: 6,
+      padding: "6px 12px",
+      fontSize: 12,
+      fontWeight: 600,
+      cursor: busy ? "default" : "pointer"
+    }
+  }, profile?.hasCv ? "Replace document" : "Upload CV or portfolio"), profile?.hasCv && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11.5,
+      color: "var(--text-secondary)"
+    }
+  }, profile.cvFilename), /*#__PURE__*/React.createElement("button", {
+    onClick: async () => {
+      await fetch(`${API_BASE}/api/profile/cv`, {
+        method: "DELETE",
+        credentials: "include"
+      });
+      await load();
+      onProfileChanged && onProfileChanged();
+    },
+    style: {
+      background: "transparent",
+      border: "none",
+      color: "#A32D2D",
+      cursor: "pointer",
+      fontSize: 11.5,
+      padding: 0
+    }
+  }, "Remove")), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      color: "var(--text-muted)"
+    }
+  }, ".docx, .pdf, .txt or .md")), err && /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 11.5,
+      color: "#A32D2D",
+      margin: "0 0 8px"
+    }
+  }, err), msg && /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 11.5,
+      color: "#27500A",
+      margin: "0 0 8px"
+    }
+  }, msg), !profile?.hasCv && /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 11.5,
+      color: "var(--text-secondary)",
+      margin: "0 0 10px",
+      lineHeight: 1.45
+    }
+  }, "Without a document, positions are scored against a general profile. Uploading yours is what makes the numbers about you."), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 10.5,
+      color: "var(--text-muted)",
+      textTransform: "uppercase",
+      letterSpacing: 0.3,
+      margin: "0 0 5px"
+    }
+  }, "Fields of interest"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexWrap: "wrap",
+      gap: 5,
+      marginBottom: 6
+    }
+  }, (profile?.interests || []).map(t => /*#__PURE__*/React.createElement("span", {
+    key: t,
+    style: {
+      display: "inline-flex",
+      alignItems: "center",
+      gap: 4,
+      background: "var(--bg-accent)",
+      color: "var(--text-accent)",
+      borderRadius: 12,
+      padding: "2px 8px",
+      fontSize: 11
+    }
+  }, "#", t, /*#__PURE__*/React.createElement("button", {
+    onClick: () => saveTags((profile.interests || []).filter(x => x !== t)),
+    style: {
+      background: "transparent",
+      border: "none",
+      cursor: "pointer",
+      color: "inherit",
+      fontSize: 12,
+      lineHeight: 1,
+      padding: 0
+    }
+  }, "×"))), (profile?.interests || []).length === 0 && /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: "var(--text-muted)"
+    }
+  }, "None yet.")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6,
+      maxWidth: 380
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    style: {
+      ...inputStyle,
+      padding: "5px 8px",
+      fontSize: 12
+    },
+    placeholder: "Add a field, e.g. biology, XAI, sensors",
+    value: tagInput,
+    onChange: e => setTagInput(e.target.value),
+    onKeyDown: e => {
+      if (e.key === "Enter") addTag();
+    }
+  }), /*#__PURE__*/React.createElement("button", {
+    onClick: addTag,
+    style: {
+      background: "var(--surface-2)",
+      border: "0.5px solid var(--border-strong)",
+      borderRadius: 5,
+      cursor: "pointer",
+      fontSize: 11.5,
+      padding: "0 11px"
+    }
+  }, "Add")), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 10.5,
+      color: "var(--text-muted)",
+      margin: "5px 0 0",
+      lineHeight: 1.4
+    }
+  }, "A field you add but your document does not evidence counts as interest only. A tag is a claim; the document is the evidence.")), s && /*#__PURE__*/React.createElement("div", {
+    style: {
+      borderTop: "0.5px solid var(--border)",
+      paddingTop: 9
+    }
+  }, /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 10.5,
+      color: "var(--text-muted)",
+      textTransform: "uppercase",
+      letterSpacing: 0.3,
+      margin: "0 0 6px"
+    }
+  }, "What was read from your document"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 11.5,
+      color: "var(--text-secondary)",
+      margin: "0 0 8px"
+    }
+  }, s.areaCount, " research area", s.areaCount === 1 ? "" : "s", ", ", s.methodCount, " method", s.methodCount === 1 ? "" : "s", ", publications:", " ", /*#__PURE__*/React.createElement("strong", {
+    style: {
+      color: s.hasPublications ? "#27500A" : "var(--text-secondary)"
+    }
+  }, s.hasPublications ? "yes" : "none detected"), s.publicationDetail?.explicit_denial ? " (your document states this)" : ""), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      gap: 4,
+      maxHeight: 260,
+      overflowY: "auto"
+    }
+  }, (profile.areas || []).slice().sort((a, b) => GRADE_ORDER.indexOf(a.grade) - GRADE_ORDER.indexOf(b.grade)).map(a => /*#__PURE__*/React.createElement("div", {
+    key: a.id,
+    style: {
+      border: "0.5px solid var(--border)",
+      borderRadius: 6,
+      padding: "6px 8px",
+      background: "var(--surface-2)"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      gap: 8,
+      alignItems: "center"
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 500
+    }
+  }, a.label), /*#__PURE__*/React.createElement("select", {
+    value: a.grade,
+    onChange: e => setGrade(a.id, e.target.value),
+    title: "Correct this if the reading is wrong",
+    style: {
+      fontSize: 10,
+      padding: "1px 3px",
+      borderRadius: 4,
+      border: "0.5px solid var(--border)",
+      background: "var(--surface-1)",
+      color: GRADE_COLOR[a.grade],
+      fontFamily: "inherit"
+    }
+  }, GRADE_ORDER.map(g => /*#__PURE__*/React.createElement("option", {
+    key: g,
+    value: g
+  }, GRADE_LABEL[g])))), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 10,
+      color: "var(--text-secondary)",
+      margin: "2px 0 0",
+      lineHeight: 1.35
+    }
+  }, a.evidence))))));
+}
+
+/* ================================================================== admin */
+function AdminPanel({
+  onClose,
+  me
+}) {
+  const [users, setUsers] = useState([]);
+  const [err, setErr] = useState("");
+  const [newUser, setNewUser] = useState({
+    email: "",
+    password: "",
+    role: "user"
+  });
+  const load = useCallback(async () => {
+    try {
+      const r = await fetch(`${API_BASE}/api/admin/users`, {
+        credentials: "include"
+      });
+      if (r.ok) setUsers(await r.json());else setErr("You do not have access to user administration.");
+    } catch (e) {
+      setErr("Could not load users.");
+    }
+  }, []);
+  useEffect(() => {
+    load();
+  }, [load]);
+  const call = async (url, method, body) => {
+    setErr("");
+    try {
+      const r = await fetch(`${API_BASE}${url}`, {
+        method,
+        credentials: "include",
+        headers: body ? {
+          "Content-Type": "application/json"
+        } : undefined,
+        body: body ? JSON.stringify(body) : undefined
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setErr(data.error || "That did not work.");
+        return false;
+      }
+      await load();
+      return true;
+    } catch (e) {
+      setErr("Could not reach the server.");
+      return false;
+    }
+  };
+  const cell = {
+    padding: "5px 7px",
+    fontSize: 11.5,
+    borderBottom: "0.5px solid var(--border)"
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      border: "1px solid var(--border-strong)",
+      borderRadius: 10,
+      padding: 14,
+      marginBottom: 14,
+      background: "var(--surface-1)"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h3", {
+    style: {
+      fontSize: 14,
+      fontWeight: 600,
+      margin: "0 0 2px"
+    }
+  }, "User administration"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 11.5,
+      color: "var(--text-secondary)",
+      margin: 0
+    }
+  }, "Deleting an account also removes that person's notes, statuses and documents.")), /*#__PURE__*/React.createElement("button", {
+    onClick: onClose,
+    style: {
+      background: "transparent",
+      border: "none",
+      cursor: "pointer",
+      color: "var(--text-muted)",
+      fontSize: 17,
+      lineHeight: 1,
+      padding: 0
+    }
+  }, "×")), err && /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 11.5,
+      color: "#A32D2D",
+      margin: "0 0 8px"
+    }
+  }, err), /*#__PURE__*/React.createElement("div", {
+    style: {
+      overflowX: "auto",
+      marginBottom: 12
+    }
+  }, /*#__PURE__*/React.createElement("table", {
+    style: {
+      width: "100%",
+      borderCollapse: "collapse",
+      minWidth: 620
+    }
+  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, ["Email", "Name", "Role", "Active", "CV", "Tracked", "Last login", ""].map(h => /*#__PURE__*/React.createElement("th", {
+    key: h,
+    style: {
+      ...cell,
+      textAlign: "left",
+      fontWeight: 500,
+      color: "var(--text-secondary)",
+      fontSize: 10.5,
+      textTransform: "uppercase",
+      letterSpacing: 0.3
+    }
+  }, h)))), /*#__PURE__*/React.createElement("tbody", null, users.map(u => /*#__PURE__*/React.createElement("tr", {
+    key: u.id
+  }, /*#__PURE__*/React.createElement("td", {
+    style: cell
+  }, u.email, u.id === me?.id && /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: "var(--text-muted)"
+    }
+  }, " (you)")), /*#__PURE__*/React.createElement("td", {
+    style: cell
+  }, u.name), /*#__PURE__*/React.createElement("td", {
+    style: cell
+  }, /*#__PURE__*/React.createElement("select", {
+    value: u.role,
+    disabled: u.id === me?.id,
+    onChange: e => call(`/api/admin/users/${u.id}`, "PATCH", {
+      role: e.target.value
+    }),
+    style: {
+      fontSize: 11,
+      padding: "1px 3px",
+      borderRadius: 4,
+      border: "0.5px solid var(--border)",
+      background: "var(--surface-2)",
+      fontFamily: "inherit"
+    }
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "user"
+  }, "user"), /*#__PURE__*/React.createElement("option", {
+    value: "superuser"
+  }, "superuser"))), /*#__PURE__*/React.createElement("td", {
+    style: cell
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: u.isActive,
+    disabled: u.id === me?.id,
+    onChange: e => call(`/api/admin/users/${u.id}`, "PATCH", {
+      isActive: e.target.checked
+    })
+  })), /*#__PURE__*/React.createElement("td", {
+    style: cell
+  }, u.hasCv ? "yes" : "no"), /*#__PURE__*/React.createElement("td", {
+    style: cell
+  }, u.trackedPositions), /*#__PURE__*/React.createElement("td", {
+    style: {
+      ...cell,
+      color: "var(--text-secondary)"
+    }
+  }, u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "short"
+  }) : "never"), /*#__PURE__*/React.createElement("td", {
+    style: cell
+  }, /*#__PURE__*/React.createElement("button", {
+    disabled: u.id === me?.id,
+    onClick: () => {
+      if (confirm(`Delete ${u.email} and all their data? This cannot be undone.`)) call(`/api/admin/users/${u.id}`, "DELETE");
+    },
+    style: {
+      background: "transparent",
+      border: "none",
+      color: u.id === me?.id ? "var(--text-muted)" : "#A32D2D",
+      cursor: u.id === me?.id ? "default" : "pointer",
+      fontSize: 11,
+      padding: 0
+    }
+  }, "Delete"))))))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      borderTop: "0.5px solid var(--border)",
+      paddingTop: 9
+    }
+  }, /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 10.5,
+      color: "var(--text-muted)",
+      textTransform: "uppercase",
+      letterSpacing: 0.3,
+      margin: "0 0 6px"
+    }
+  }, "Add a user"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6,
+      flexWrap: "wrap",
+      alignItems: "center"
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    style: {
+      ...inputStyle,
+      width: 190,
+      padding: "5px 8px",
+      fontSize: 12
+    },
+    placeholder: "Email",
+    value: newUser.email,
+    onChange: e => setNewUser({
+      ...newUser,
+      email: e.target.value
+    })
+  }), /*#__PURE__*/React.createElement("input", {
+    style: {
+      ...inputStyle,
+      width: 170,
+      padding: "5px 8px",
+      fontSize: 12
+    },
+    type: "password",
+    placeholder: "Password (8+)",
+    value: newUser.password,
+    onChange: e => setNewUser({
+      ...newUser,
+      password: e.target.value
+    })
+  }), /*#__PURE__*/React.createElement("select", {
+    style: {
+      ...inputStyle,
+      width: 110,
+      padding: "5px 8px",
+      fontSize: 12
+    },
+    value: newUser.role,
+    onChange: e => setNewUser({
+      ...newUser,
+      role: e.target.value
+    })
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "user"
+  }, "user"), /*#__PURE__*/React.createElement("option", {
+    value: "superuser"
+  }, "superuser")), /*#__PURE__*/React.createElement("button", {
+    onClick: async () => {
+      if (await call("/api/admin/users", "POST", newUser)) setNewUser({
+        email: "",
+        password: "",
+        role: "user"
+      });
+    },
+    style: {
+      background: "#EAF3DE",
+      color: "#27500A",
+      border: "none",
+      borderRadius: 5,
+      padding: "6px 12px",
+      fontSize: 12,
+      fontWeight: 600,
+      cursor: "pointer"
+    }
+  }, "Create"))));
+}
+
+/* ================================================== authenticated wrapper */
+function App() {
+  const [user, setUser] = useState(null);
+  const [checking, setChecking] = useState(true);
+  useEffect(() => {
+    if (!REQUIRE_AUTH) {
+      setChecking(false);
+      return;
+    }
+    (async () => {
+      try {
+        const r = await fetch(`${API_BASE}/api/auth/me`, {
+          credentials: "include"
+        });
+        if (r.ok) setUser(await r.json());
+      } catch (e) {/* treated as signed out */}
+      setChecking(false);
+    })();
+  }, []);
+  if (!REQUIRE_AUTH) return /*#__PURE__*/React.createElement(PhDTracker, null);
+  if (checking) {
+    return /*#__PURE__*/React.createElement("p", {
+      style: {
+        fontFamily: "var(--font-sans)",
+        fontSize: 13,
+        color: "var(--text-secondary)",
+        padding: 24
+      }
+    }, "Checking your session…");
+  }
+  if (!user) return /*#__PURE__*/React.createElement(AuthGate, {
+    onAuthed: setUser
+  });
+  return /*#__PURE__*/React.createElement(PhDTracker, {
+    authUser: user,
+    onSignOut: () => setUser(null)
+  });
+}
+ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));
+  </script>
+</body>
+</html>
